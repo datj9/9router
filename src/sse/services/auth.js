@@ -8,6 +8,22 @@ import * as log from "../utils/logger.js";
 // Mutex to prevent race conditions during account selection
 let selectionMutex = Promise.resolve();
 
+export function isRateLimitError(status, errorText, resetsAtMs = null) {
+  if (status === 429) return true;
+  if (resetsAtMs && resetsAtMs > Date.now()) return true;
+  const text = typeof errorText === "string" ? errorText.toLowerCase() : "";
+  return (
+    text.includes("rate limit") ||
+    text.includes("rate_limited") ||
+    text.includes("rate-limit") ||
+    text.includes("too many requests") ||
+    text.includes("quota exceeded") ||
+    text.includes("usage_limit") ||
+    text.includes("usage limit") ||
+    text.includes("insufficient quota")
+  );
+}
+
 /**
  * Get provider credentials from localDb
  * Filters out unavailable accounts and returns the selected account based on strategy
@@ -201,6 +217,7 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
   const connections = await getProviderConnections({ provider });
   const conn = connections.find(c => c.id === connectionId);
   const backoffLevel = conn?.backoffLevel || 0;
+  const rateLimited = isRateLimitError(status, errorText, resetsAtMs);
 
   // Provider-specific precise cooldown (e.g. codex usage_limit_reached resets_at) overrides backoff
   let shouldFallback, cooldownMs, newBackoffLevel;
@@ -218,6 +235,7 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
 
   await updateProviderConnection(connectionId, {
     ...lockUpdate,
+    ...(rateLimited ? { isActive: false } : {}),
     testStatus: "unavailable",
     lastError: reason,
     errorCode: status,
@@ -228,6 +246,9 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
   const lockKey = Object.keys(lockUpdate)[0];
   const connName = conn?.displayName || conn?.name || conn?.email || connectionId.slice(0, 8);
   log.warn("AUTH", `${connName} locked ${lockKey} for ${Math.round(cooldownMs / 1000)}s [${status}]`);
+  if (rateLimited) {
+    log.warn("AUTH", `${connName} disabled after rate limit [${status}]`);
+  }
 
   if (provider && status && reason) {
     console.error(`❌ ${provider} [${status}]: ${reason}`);
