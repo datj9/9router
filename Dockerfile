@@ -36,6 +36,8 @@ COPY --from=builder /app/src/mitm ./src/mitm
 COPY --from=builder /app/node_modules/node-forge ./node_modules/node-forge
 # Ensure `next` is available at runtime in case tracing did not include it.
 COPY --from=builder /app/node_modules/next ./node_modules/next
+# nodemailer is loaded via dynamic import for SMTP email; tracing can miss it.
+COPY --from=builder /app/node_modules/nodemailer ./node_modules/nodemailer
 
 RUN mkdir -p /app/data && chown -R node:node /app && \
   mkdir -p /app/data-home && chown node:node /app/data-home && \
