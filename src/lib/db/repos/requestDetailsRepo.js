@@ -92,6 +92,7 @@ async function flushToDatabase() {
             connectionId: item.connectionId || null,
             apiKey: item.apiKey || null,
             endpoint: item.endpoint || null,
+            project: item.project || null,
             timestamp: item.timestamp,
             status: item.status || null,
             latency: item.latency || {},
@@ -103,8 +104,8 @@ async function flushToDatabase() {
           };
 
           db.run(
-            `INSERT INTO requestDetails(id, timestamp, provider, model, connectionId, status, data) VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET timestamp = excluded.timestamp, provider = excluded.provider, model = excluded.model, connectionId = excluded.connectionId, status = excluded.status, data = excluded.data`,
-            [record.id, record.timestamp, record.provider, record.model, record.connectionId, record.status, stringifyJson(record)]
+            `INSERT INTO requestDetails(id, timestamp, provider, model, connectionId, project, status, data) VALUES(?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET timestamp = excluded.timestamp, provider = excluded.provider, model = excluded.model, connectionId = excluded.connectionId, project = excluded.project, status = excluded.status, data = excluded.data`,
+            [record.id, record.timestamp, record.provider, record.model, record.connectionId, record.project, record.status, stringifyJson(record)]
           );
         }
 
@@ -151,6 +152,14 @@ export async function getRequestDetails(filter = {}) {
   if (filter.provider) { conds.push("provider = ?"); params.push(filter.provider); }
   if (filter.model) { conds.push("model = ?"); params.push(filter.model); }
   if (filter.connectionId) { conds.push("connectionId = ?"); params.push(filter.connectionId); }
+  if (filter.project) {
+    if (filter.project === "__untagged__") {
+      conds.push("(project IS NULL OR project = '')");
+    } else {
+      conds.push("project = ?");
+      params.push(filter.project);
+    }
+  }
   if (filter.status) { conds.push("status = ?"); params.push(filter.status); }
   if (filter.startDate) { conds.push("timestamp >= ?"); params.push(new Date(filter.startDate).toISOString()); }
   if (filter.endDate) { conds.push("timestamp <= ?"); params.push(new Date(filter.endDate).toISOString()); }
