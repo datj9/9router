@@ -88,6 +88,11 @@ function getInputTokens(tokens) {
   return prompt < cache ? cache : prompt;
 }
 
+function formatApiKeyPrefix(apiKey) {
+  if (!apiKey || typeof apiKey !== "string") return "-";
+  return apiKey.length > 8 ? apiKey.slice(0, 8) : apiKey;
+}
+
 export default function RequestDetailsTab() {
   const [details, setDetails] = useState([]);
   const [pagination, setPagination] = useState({
@@ -238,10 +243,11 @@ export default function RequestDetailsTab() {
 
       <Card padding="none">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[880px]">
+          <table className="w-full min-w-[980px]">
             <thead>
               <tr className="border-b border-black/5 dark:border-white/5">
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Timestamp</th>
+                <th className="text-left p-4 text-sm font-semibold text-text-main">API Key</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Model</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Provider</th>
                 <th className="text-right p-4 text-sm font-semibold text-text-main">Input Tokens</th>
@@ -253,7 +259,7 @@ export default function RequestDetailsTab() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan="7" className="p-8 text-center text-text-muted">
+                  <td colSpan="8" className="p-8 text-center text-text-muted">
                     <div className="flex items-center justify-center gap-2">
                       <span className="material-symbols-outlined animate-spin text-[20px]">progress_activity</span>
                       Loading...
@@ -262,7 +268,7 @@ export default function RequestDetailsTab() {
                 </tr>
               ) : details.length === 0 ? (
                 <tr>
-                  <td colSpan="7" className="p-8 text-center text-text-muted">
+                  <td colSpan="8" className="p-8 text-center text-text-muted">
                     No request details found
                   </td>
                 </tr>
@@ -274,6 +280,9 @@ export default function RequestDetailsTab() {
                   >
                     <td className="whitespace-nowrap p-4 text-sm text-text-main">
                       {new Date(detail.timestamp).toLocaleString()}
+                    </td>
+                    <td className="whitespace-nowrap p-4 font-mono text-sm text-text-main">
+                      {formatApiKeyPrefix(detail.apiKey)}
                     </td>
                     <td className="max-w-[260px] truncate p-4 font-mono text-sm text-text-main">
                       {detail.model}
@@ -363,6 +372,10 @@ export default function RequestDetailsTab() {
                 <span className="text-text-main font-mono">
                   TTFT {selectedDetail.latency?.ttft || 0}ms / Total {selectedDetail.latency?.total || 0}ms
                 </span>
+              </div>
+              <div>
+                <span className="text-text-muted">API Key:</span>{" "}
+                <span className="font-mono text-text-main">{formatApiKeyPrefix(selectedDetail.apiKey)}</span>
               </div>
               <div>
                 <span className="text-text-muted">Input Tokens:</span>{" "}
