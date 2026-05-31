@@ -5,6 +5,7 @@ import {
   markAccountUnavailable,
   clearAccountError,
   extractApiKey,
+  extractProjectTag,
   isValidApiKey,
 } from "../services/auth.js";
 import { cacheClaudeHeaders } from "open-sse/utils/claudeHeaderCache.js";
@@ -40,7 +41,10 @@ export async function handleChat(request, clientRawRequest = null) {
     clientRawRequest = {
       endpoint: url.pathname,
       body,
-      headers: Object.fromEntries(request.headers.entries())
+      headers: Object.fromEntries(request.headers.entries()),
+      // Caller-supplied usage-grouping label (x-project header); rides
+      // alongside endpoint into saveUsageStats. null when untagged.
+      project: extractProjectTag(request)
     };
   }
   cacheClaudeHeaders(clientRawRequest.headers);

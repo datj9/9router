@@ -299,6 +299,28 @@ export function extractApiKey(request) {
   return null;
 }
 
+// Max stored length for a project tag — bounds DB/log growth and blocks abuse
+// via an oversized header value, keeping audit fields (A.12.4) sane.
+const MAX_PROJECT_TAG_LENGTH = 100;
+
+/**
+ * Extract the caller-supplied project tag used to group usage stats.
+ * Read from the `x-project` header (preferred) or `x-project-id` alias.
+ * Returns null when absent so usage rolls up under "Untagged".
+ *
+ * Distinct from the Google Cloud project id handled by
+ * getProjectIdForConnection — this is a free-form usage-grouping label.
+ * @param {Request} request - Incoming web Request exposing a headers map
+ * @returns {string|null} Trimmed, length-capped project tag, or null
+ */
+export function extractProjectTag(request) {
+  const rawProjectTag = request.headers.get("x-project") || request.headers.get("x-project-id");
+  if (!rawProjectTag) return null;
+
+  const projectTag = rawProjectTag.trim().slice(0, MAX_PROJECT_TAG_LENGTH);
+  return projectTag.length > 0 ? projectTag : null;
+}
+
 /**
  * Validate API key (optional - for local use can skip)
  */

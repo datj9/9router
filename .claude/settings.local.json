@@ -1,0 +1,8 @@
+{
+  "_note": "Engineer-local settings — highest precedence in Claude Code. Use this file for overrides that should win over any user-level ~/.claude/settings.json (e.g. a conflicting statusLine from another harness like GSD).",
+  "statusLine": {
+    "type": "command",
+    "command": ".claude/bin/devkit-statusline.sh",
+    "padding": 0
+  }
+}
