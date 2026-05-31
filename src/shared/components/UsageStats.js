@@ -199,11 +199,14 @@ const PERIODS = [
   { value: "60d", label: "60D" },
 ];
 
-export default function UsageStats({ period: periodProp, setPeriod: setPeriodProp, hidePeriodSelector = false, defaultTableView = "model", lockTableView = false } = {}) {
+export default function UsageStats({ period: periodProp, setPeriod: setPeriodProp, hidePeriodSelector = false, defaultTableView = "model", lockTableView = false, projectFocus = false } = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const sortBy = searchParams.get("sortBy") || "rawModel";
+  // On a project-first page, groups should lead with the project name rather
+  // than the model. Everywhere else keep the model-centric default.
+  const defaultSortField = projectFocus ? "projectName" : "rawModel";
+  const sortBy = searchParams.get("sortBy") || defaultSortField;
   const sortOrder = searchParams.get("sortOrder") || "asc";
 
   const [stats, setStats] = useState(null);
@@ -474,8 +477,8 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       {/* Overview cards */}
       {loading ? spinner : <OverviewCards stats={stats} />}
 
-      {/* Provider topology + Recent Requests */}
-      {loading ? spinner : (
+      {/* Provider topology + Recent Requests — model/provider-centric, hidden on project-first pages */}
+      {!projectFocus && (loading ? spinner : (
         <div className="grid min-w-0 grid-cols-1 items-stretch gap-2 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
           <ProviderTopology
             providers={providers}
@@ -485,10 +488,10 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
           />
           <RecentRequests requests={stats.recentRequests || []} />
         </div>
-      )}
+      ))}
 
       {/* Token / Cost chart - sync period */}
-      {loading ? spinner : <UsageChart period={period} />}
+      {!projectFocus && (loading ? spinner : <UsageChart period={period} />)}
 
       {/* Table with dropdown selector */}
       <div className="flex flex-col gap-3">
