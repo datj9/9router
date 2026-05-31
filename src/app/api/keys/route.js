@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getApiKeys, createApiKey } from "@/lib/localDb";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
+import { validateKeyMetadata } from "@/lib/apiKeys/validation";
 
 export const dynamic = "force-dynamic";
 
@@ -19,21 +20,33 @@ export async function GET() {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { name } = body;
+    const { name, managerEmail, managerName, expiresAt } = body;
 
     if (!name) {
       return NextResponse.json({ error: "Name is required" }, { status: 400 });
     }
 
+    const validationError = validateKeyMetadata({ managerEmail, expiresAt });
+    if (validationError) {
+      return NextResponse.json({ error: validationError }, { status: 400 });
+    }
+
     // Always get machineId from server
     const machineId = await getConsistentMachineId();
-    const apiKey = await createApiKey(name, machineId);
+    const apiKey = await createApiKey(name, machineId, {
+      managerEmail: managerEmail?.trim() || null,
+      managerName: managerName?.trim() || null,
+      expiresAt: expiresAt || null,
+    });
 
     return NextResponse.json({
       key: apiKey.key,
       name: apiKey.name,
       id: apiKey.id,
       machineId: apiKey.machineId,
+      managerEmail: apiKey.managerEmail,
+      managerName: apiKey.managerName,
+      expiresAt: apiKey.expiresAt,
     }, { status: 201 });
   } catch (error) {
     console.log("Error creating key:", error);

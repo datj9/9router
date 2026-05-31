@@ -58,6 +58,7 @@ function aggregateEntryToDay(day, entry) {
   day.byApiKey ||= {};
   day.byEndpoint ||= {};
   day.byProject ||= {};
+  day.byApiKeyProject ||= {};
 
   if (entry.provider) addToCounter(day.byProvider, entry.provider, vals);
 
@@ -80,6 +81,10 @@ function aggregateEntryToDay(day, entry) {
   const projectKeySegment = projectValue || "__untagged__";
   const projectKey = `${projectKeySegment}|${entry.model}|${entry.provider || "unknown"}`;
   addToCounter(day.byProject, projectKey, { ...vals, meta: { project: projectValue, rawModel: entry.model, provider: entry.provider } });
+
+  // API key × project, for the per-API-key usage-by-project chart.
+  const akProjectKey = `${apiKeyVal}|${projectKeySegment}`;
+  addToCounter(day.byApiKeyProject, akProjectKey, { ...vals, meta: { apiKey: entry.apiKey || null, project: projectValue } });
 }
 
 function pushToRing(entry) {
@@ -374,7 +379,7 @@ export async function getUsageStats(period = "all") {
   const stats = {
     totalRequests: 0,
     totalPromptTokens: 0, totalCompletionTokens: 0, totalCost: 0,
-    byProvider: {}, byModel: {}, byAccount: {}, byApiKey: {}, byEndpoint: {}, byProject: {},
+    byProvider: {}, byModel: {}, byAccount: {}, byApiKey: {}, byEndpoint: {}, byProject: {}, byApiKeyProject: {},
     last10Minutes: [],
     pending: pendingRequests,
     activeRequests: [],
@@ -522,6 +527,21 @@ export async function getUsageStats(period = "all") {
         stats.byProject[projectKey].cost += pr.cost || 0;
         if (dateKey > (stats.byProject[projectKey].lastUsed || "")) stats.byProject[projectKey].lastUsed = dateKey;
       }
+
+      for (const [akpKey, akp] of Object.entries(day.byApiKeyProject || {})) {
+        const apiKeyVal = akp.apiKey;
+        const keyInfo = apiKeyVal ? apiKeyMap[apiKeyVal] : null;
+        const keyName = keyInfo?.name || (apiKeyVal ? apiKeyVal.slice(0, 8) + "..." : "Local (No API Key)");
+        const projectName = akp.project || "Untagged";
+        if (!stats.byApiKeyProject[akpKey]) {
+          stats.byApiKeyProject[akpKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cost: 0, apiKey: apiKeyVal || null, keyName, project: akp.project || null, projectName, lastUsed: dateKey };
+        }
+        stats.byApiKeyProject[akpKey].requests += akp.requests || 0;
+        stats.byApiKeyProject[akpKey].promptTokens += akp.promptTokens || 0;
+        stats.byApiKeyProject[akpKey].completionTokens += akp.completionTokens || 0;
+        stats.byApiKeyProject[akpKey].cost += akp.cost || 0;
+        if (dateKey > (stats.byApiKeyProject[akpKey].lastUsed || "")) stats.byApiKeyProject[akpKey].lastUsed = dateKey;
+      }
     }
 
     // Overlay precise lastUsed timestamps from history
@@ -645,6 +665,17 @@ export async function getUsageStats(period = "all") {
       const projectEntry = stats.byProject[projectKey];
       projectEntry.requests++; projectEntry.promptTokens += promptTokens; projectEntry.completionTokens += completionTokens; projectEntry.cost += entryCost;
       if (new Date(r.timestamp) > new Date(projectEntry.lastUsed)) projectEntry.lastUsed = r.timestamp;
+
+      const apiKeyValForProject = (r.apiKey && typeof r.apiKey === "string") ? r.apiKey : null;
+      const akpProjectName = projectValue || "Untagged";
+      const akpKeyName = apiKeyValForProject ? (apiKeyMap[apiKeyValForProject]?.name || apiKeyValForProject.slice(0, 8) + "...") : "Local (No API Key)";
+      const akpKey = `${apiKeyValForProject || "local-no-key"}|${projectValue || "__untagged__"}`;
+      if (!stats.byApiKeyProject[akpKey]) {
+        stats.byApiKeyProject[akpKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cost: 0, apiKey: apiKeyValForProject, keyName: akpKeyName, project: projectValue, projectName: akpProjectName, lastUsed: r.timestamp };
+      }
+      const akpEntry = stats.byApiKeyProject[akpKey];
+      akpEntry.requests++; akpEntry.promptTokens += promptTokens; akpEntry.completionTokens += completionTokens; akpEntry.cost += entryCost;
+      if (new Date(r.timestamp) > new Date(akpEntry.lastUsed)) akpEntry.lastUsed = r.timestamp;
     }
   }
 
