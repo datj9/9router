@@ -36,6 +36,17 @@ const DEFAULT_SETTINGS = {
   rtkEnabled: true,
   cavemanEnabled: false,
   cavemanLevel: "full",
+  // Email notifications (API key rotation, etc.)
+  emailEnabled: false,
+  emailProvider: "resend", // "resend" | "smtp"
+  emailFromAddress: "",
+  emailFromName: "9Router",
+  resendApiKey: "",
+  smtpHost: "",
+  smtpPort: 587,
+  smtpSecure: false,
+  smtpUser: "",
+  smtpPassword: "",
 };
 
 async function readRaw() {
