@@ -14,7 +14,7 @@ export default function ProjectsPage() {
             to break down token and cost by project and model.
           </p>
         </div>
-        <UsageStats defaultTableView="project" lockTableView />
+        <UsageStats defaultTableView="project" lockTableView isProjectFocused />
       </div>
     </Suspense>
   );
