@@ -93,6 +93,12 @@ function formatApiKeyPrefix(apiKey) {
   return apiKey.length > 8 ? apiKey.slice(0, 8) : apiKey;
 }
 
+const UNTAGGED_PROJECT_VALUE = "__untagged__";
+
+function formatProjectName(project) {
+  return project && typeof project === "string" ? project : "Untagged";
+}
+
 export default function RequestDetailsTab() {
   const [details, setDetails] = useState([]);
   const [pagination, setPagination] = useState({
@@ -105,9 +111,11 @@ export default function RequestDetailsTab() {
   const [selectedDetail, setSelectedDetail] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [providers, setProviders] = useState([]);
+  const [projects, setProjects] = useState([]);
   const [providerNameCache, setProviderNameCache] = useState(null);
   const [filters, setFilters] = useState({
     provider: "",
+    project: "",
     startDate: "",
     endDate: ""
   });
@@ -125,6 +133,35 @@ export default function RequestDetailsTab() {
     }
   }, []);
 
+  const fetchProjects = useCallback(async () => {
+    try {
+      const res = await fetch("/api/usage/stats?period=all");
+      const data = await res.json();
+      const projectNames = new Set();
+      let hasUntagged = false;
+
+      for (const entry of Object.values(data.byProject || {})) {
+        if (entry.project && typeof entry.project === "string") {
+          projectNames.add(entry.project);
+        } else {
+          hasUntagged = true;
+        }
+      }
+
+      const projectOptions = [...projectNames]
+        .sort((first, second) => first.localeCompare(second))
+        .map((name) => ({ value: name, label: name }));
+
+      if (hasUntagged) {
+        projectOptions.push({ value: UNTAGGED_PROJECT_VALUE, label: "Untagged" });
+      }
+
+      setProjects(projectOptions);
+    } catch (error) {
+      console.error("Failed to fetch projects:", error);
+    }
+  }, []);
+
   const fetchDetails = useCallback(async () => {
     setLoading(true);
     try {
@@ -133,6 +170,7 @@ export default function RequestDetailsTab() {
         pageSize: pagination.pageSize.toString()
       });
       if (filters.provider) params.append("provider", filters.provider);
+      if (filters.project) params.append("project", filters.project);
       if (filters.startDate) params.append("startDate", filters.startDate);
       if (filters.endDate) params.append("endDate", filters.endDate);
 
@@ -150,7 +188,8 @@ export default function RequestDetailsTab() {
 
   useEffect(() => {
     fetchProviders();
-  }, [fetchProviders]);
+    fetchProjects();
+  }, [fetchProviders, fetchProjects]);
 
   useEffect(() => {
     fetchDetails();
@@ -170,13 +209,13 @@ export default function RequestDetailsTab() {
   };
 
   const handleClearFilters = () => {
-    setFilters({ provider: "", startDate: "", endDate: "" });
+    setFilters({ provider: "", project: "", startDate: "", endDate: "" });
   };
 
   return (
     <div className="flex min-w-0 flex-col gap-6">
       <Card padding="md">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <div className="flex min-w-0 flex-col gap-2">
             <label htmlFor="provider-filter" className="text-sm font-medium text-text-main">Provider</label>
             <select
@@ -198,7 +237,29 @@ export default function RequestDetailsTab() {
               ))}
             </select>
           </div>
-          
+
+          <div className="flex min-w-0 flex-col gap-2">
+            <label htmlFor="project-filter" className="text-sm font-medium text-text-main">Project</label>
+            <select
+              id="project-filter"
+              value={filters.project}
+              onChange={(e) => setFilters({ ...filters, project: e.target.value })}
+              className={cn(
+                "h-9 px-3 rounded-lg border border-black/10 dark:border-white/10 bg-surface",
+                "text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/20",
+                "w-full min-w-0 cursor-pointer"
+              )}
+              style={{ colorScheme: 'auto' }}
+            >
+              <option value="">All Projects</option>
+              {projects.map((project) => (
+                <option key={project.value} value={project.value}>
+                  {project.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div className="flex min-w-0 flex-col gap-2">
             <label htmlFor="start-date-filter" className="text-sm font-medium text-text-main">Start Date</label>
             <input
@@ -232,7 +293,7 @@ export default function RequestDetailsTab() {
             <Button 
               variant="ghost" 
               onClick={handleClearFilters}
-              disabled={!filters.provider && !filters.startDate && !filters.endDate}
+              disabled={!filters.provider && !filters.project && !filters.startDate && !filters.endDate}
               className="w-full"
             >
               Clear Filters
@@ -250,6 +311,7 @@ export default function RequestDetailsTab() {
                 <th className="text-left p-4 text-sm font-semibold text-text-main">API Key</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Model</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Provider</th>
+                <th className="text-left p-4 text-sm font-semibold text-text-main">Project</th>
                 <th className="text-right p-4 text-sm font-semibold text-text-main">Input Tokens</th>
                 <th className="text-right p-4 text-sm font-semibold text-text-main">Output Tokens</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Latency</th>
@@ -259,7 +321,7 @@ export default function RequestDetailsTab() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan="8" className="p-8 text-center text-text-muted">
+                  <td colSpan="9" className="p-8 text-center text-text-muted">
                     <div className="flex items-center justify-center gap-2">
                       <span className="material-symbols-outlined animate-spin text-[20px]">progress_activity</span>
                       Loading...
@@ -268,7 +330,7 @@ export default function RequestDetailsTab() {
                 </tr>
               ) : details.length === 0 ? (
                 <tr>
-                  <td colSpan="8" className="p-8 text-center text-text-muted">
+                  <td colSpan="9" className="p-8 text-center text-text-muted">
                     No request details found
                   </td>
                 </tr>
@@ -292,6 +354,9 @@ export default function RequestDetailsTab() {
                          {getProviderName(detail.provider, providerNameCache)}
                        </span>
                      </td>
+                    <td className="max-w-[180px] truncate p-4 text-sm text-text-main">
+                      {formatProjectName(detail.project)}
+                    </td>
                     <td className="p-4 text-sm text-text-main text-right font-mono">
                       {getInputTokens(detail.tokens).toLocaleString()}
                     </td>
@@ -354,6 +419,10 @@ export default function RequestDetailsTab() {
                  <span className="text-text-muted">Provider:</span>{" "}
                  <span className="text-text-main font-medium">{getProviderName(selectedDetail.provider, providerNameCache)}</span>
                </div>
+              <div>
+                <span className="text-text-muted">Project:</span>{" "}
+                <span className="text-text-main font-medium">{formatProjectName(selectedDetail.project)}</span>
+              </div>
               <div>
                 <span className="text-text-muted">Model:</span>{" "}
                 <span className="text-text-main font-mono">{selectedDetail.model}</span>
