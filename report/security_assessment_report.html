@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Security Assessment Report - 9Router</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --paper: #ffffff;
+      --text: #172033;
+      --muted: #657084;
+      --border: #d9dee8;
+      --code-bg: #111827;
+      --code-text: #e5e7eb;
+      --high: #b42318;
+      --medium: #b54708;
+      --ok: #067647;
+      --link: #175cd3;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.55 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      width: min(1040px, calc(100% - 32px));
+      margin: 32px auto 56px;
+      background: var(--paper);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 40px;
+      box-shadow: 0 12px 30px rgb(15 23 42 / 0.06);
+    }
+    h1, h2, h3 { line-height: 1.2; margin: 0 0 14px; }
+    h1 { font-size: 30px; letter-spacing: 0; }
+    h2 { font-size: 22px; margin-top: 34px; padding-top: 20px; border-top: 1px solid var(--border); }
+    h3 { font-size: 18px; margin-top: 26px; }
+    p { margin: 0 0 12px; }
+    ul { margin: 0 0 16px 22px; padding: 0; }
+    li { margin: 6px 0; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+      background: #eef2f7;
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    pre {
+      margin: 14px 0 18px;
+      padding: 16px;
+      overflow-x: auto;
+      border-radius: 8px;
+      background: var(--code-bg);
+      color: var(--code-text);
+      border: 1px solid #253044;
+    }
+    pre code { background: transparent; color: inherit; padding: 0; }
+    a { color: var(--link); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .meta {
+      margin: 20px 0 24px;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fbfcfe;
+    }
+    .meta div { margin: 4px 0; }
+    .finding-meta {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px 18px;
+      margin: 12px 0 16px;
+      padding: 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fbfcfe;
+    }
+    .label { color: var(--muted); font-weight: 600; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid currentColor;
+    }
+    .high { color: var(--high); background: #fff4f2; }
+    .medium { color: var(--medium); background: #fff7ed; }
+    .info { color: var(--link); background: #eff6ff; }
+    .ok { color: var(--ok); background: #ecfdf3; }
+    .section-note {
+      border-left: 4px solid var(--border);
+      padding: 10px 14px;
+      margin: 14px 0 18px;
+      background: #fbfcfe;
+      color: var(--muted);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0 18px;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #f3f6fa; }
+    @media (max-width: 720px) {
+      main { width: calc(100% - 20px); margin: 10px auto 32px; padding: 20px; }
+      h1 { font-size: 24px; }
+      .finding-meta { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Security Assessment Report</h1>
+  <div class="meta">
+    <div><span class="label">Assessment date:</span> 2026-05-31</div>
+    <div><span class="label">Assessed target:</span> local 9Router dashboard/API at <code>http://localhost:20129</code></div>
+    <div><span class="label">Requested target label:</span> HR portal. No HR portal code was present in <code>/home/dat/apps/9router</code>; assessment covered current repository application.</div>
+    <div><span class="label">Method:</span> Shannon-style code-grounded recon, live route mapping, vulnerability queueing, and proof-based validation. No proof, no main finding.</div>
+  </div>
+
+  <h2>Executive Summary</h2>
+  <p>Two proven auth findings were identified.</p>
+  <table>
+    <thead>
+      <tr><th>ID</th><th>Severity</th><th>Title</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>AUTH-VULN-01</code></td>
+        <td><span class="badge high">High</span></td>
+        <td>Network clients can bypass the public LLM API key requirement by spoofing <code>Host: localhost</code> when the app is reachable on a non-loopback interface.</td>
+      </tr>
+      <tr>
+        <td><code>AUTH-VULN-02</code></td>
+        <td><span class="badge medium">Medium</span></td>
+        <td>Login lockout can be bypassed by rotating client-controlled <code>X-Forwarded-For</code> values.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>No exploitable SQL injection, XSS, or SSRF was proven in scoped testing.</p>
+
+  <h2>Findings</h2>
+
+  <h3>AUTH-VULN-01: Host Header Spoofing Bypasses API Key Requirement For Public LLM API</h3>
+  <div class="finding-meta">
+    <div><span class="label">Severity:</span> <span class="badge high">High</span></div>
+    <div><span class="label">Confidence:</span> High</div>
+    <div><span class="label">Affected endpoint:</span> <code>GET /api/v1/models</code>; same gate protects <code>/v1/*</code>, <code>/v1beta/*</code>, <code>/api/v1/*</code>, <code>/api/v1beta/*</code></div>
+    <div><span class="label">Code pointer:</span> <code>src/dashboardGuard.js:91</code>, <code>src/dashboardGuard.js:118</code>, <code>src/dashboardGuard.js:182</code>, <code>src/app/api/v1/models/route.js:433</code></div>
+  </div>
+
+  <p><strong>Summary:</strong> The public LLM API auth gate treats a request as local when the client supplies <code>Host: localhost</code>. Because <code>Host</code> is attacker-controlled and the dev server exposed <code>http://192.168.51.4:20129</code>, a network client could bypass the API-key requirement.</p>
+
+  <p><strong>Proof:</strong> Control request to network address without spoofed Host was blocked:</p>
+  <pre><code>GET /api/v1/models HTTP/1.1
+Host: 192.168.51.4:20129
+
+HTTP/1.1 401 Unauthorized
+{"error":"API key required for remote API access"}</code></pre>
+
+  <p>Same network address with spoofed Host was allowed without API key:</p>
+  <pre><code>GET /api/v1/models HTTP/1.1
+Host: localhost:20129
+
+HTTP/1.1 200 OK
+{"object":"list","data":[{"id":"cc/claude-opus-4-8","object":"model","owned_by":"cc"}, ...]}</code></pre>
+
+  <p><strong>Impact:</strong> In a configured instance, a network attacker who can reach the service can call public LLM-compatible APIs without an API key. This can expose model inventory and may consume configured provider accounts or proxy user traffic through the service.</p>
+
+  <p><strong>Root cause:</strong> <code>isLocalRequest()</code> trusts the HTTP <code>Host</code> header to prove loopback origin. <code>Host</code> only names the requested virtual host; it does not identify the remote peer.</p>
+
+  <p><strong>Remediation:</strong></p>
+  <ul>
+    <li>Do not use <code>Host</code> as proof of loopback. Validate the socket remote address from trusted runtime/proxy metadata where available.</li>
+    <li>Bind local no-auth mode to <code>127.0.0.1</code> only, or require API keys for all <code>/v1*</code> traffic whenever the server listens on non-loopback interfaces.</li>
+    <li>If proxy headers are needed, trust them only from an explicit trusted proxy allowlist.</li>
+    <li>Add regression tests where a request to a network interface with <code>Host: localhost</code> is still treated as remote.</li>
+  </ul>
+
+  <p><strong>Verification notes and cleanup:</strong> Proof stopped at <code>GET /api/v1/models</code>; no provider credentials were configured or consumed. Temporary isolated runtime data was removed after report generation.</p>
+
+  <h3>AUTH-VULN-02: Login Lockout Bypass Via Spoofed X-Forwarded-For</h3>
+  <div class="finding-meta">
+    <div><span class="label">Severity:</span> <span class="badge medium">Medium</span></div>
+    <div><span class="label">Confidence:</span> High</div>
+    <div><span class="label">Affected endpoint:</span> <code>POST /api/auth/login</code></div>
+    <div><span class="label">Code pointer:</span> <code>src/app/api/auth/login/route.js:20</code>, <code>src/lib/auth/loginLimiter.js:48</code></div>
+  </div>
+
+  <p><strong>Summary:</strong> Login lockout keys attempts by <code>X-Forwarded-For</code> when present. An unauthenticated client can rotate this header to avoid the lockout bucket.</p>
+
+  <p><strong>Proof:</strong> Five failed attempts with one spoofed IP triggered lockout:</p>
+  <pre><code>POST /api/auth/login HTTP/1.1
+X-Forwarded-For: 203.0.113.10
+Content-Type: application/json
+
+{"password":"wrong-pentest"}
+
+HTTP/1.1 429 Too Many Requests
+{"error":"Too many failed attempts. Try again in 30s. ...","retryAfter":30}</code></pre>
+
+  <p>Changing only the header avoided the locked bucket:</p>
+  <pre><code>POST /api/auth/login HTTP/1.1
+X-Forwarded-For: 203.0.113.11
+Content-Type: application/json
+
+{"password":"wrong-pentest"}
+
+HTTP/1.1 401 Unauthorized
+{"error":"Invalid password. 4 attempt(s) left before lockout.","remainingBeforeLock":4}</code></pre>
+
+  <p><strong>Impact:</strong> Attackers can continue online password guessing despite lockout. This weakens protection for default, weak, or reused dashboard passwords, especially when dashboard access is exposed through tunnels or proxies.</p>
+
+  <p><strong>Root cause:</strong> <code>getClientIp()</code> trusts unvalidated <code>X-Forwarded-For</code> and <code>X-Real-IP</code> headers from every request.</p>
+
+  <p><strong>Remediation:</strong></p>
+  <ul>
+    <li>Use framework/runtime remote address by default.</li>
+    <li>Honor <code>X-Forwarded-For</code> only when the immediate peer is a configured trusted proxy.</li>
+    <li>Consider adding account/global lockout dimensions in addition to IP.</li>
+    <li>Persist rate-limit state or use a shared store if multiple server processes are possible.</li>
+    <li>Add tests proving arbitrary <code>X-Forwarded-For</code> does not reset the limiter.</li>
+  </ul>
+
+  <p><strong>Verification notes and cleanup:</strong> Proof used wrong test passwords only. Lockout state is in memory and expires automatically.</p>
+
+  <h2>Appendix: Tested But Not Proven</h2>
+
+  <h3>Injection</h3>
+  <p>Authenticated SQL probe against <code>GET /api/usage/request-details?provider=' OR 1=1--&amp;page=1&amp;pageSize=1</code> returned normal empty JSON. Code uses fixed condition fragments plus bound parameters in reviewed repos.</p>
+
+  <h3>XSS</h3>
+  <p>Reviewed raw HTML sinks were static or not connected to attacker-controlled live input in scope. No reflected/stored/DOM XSS proof produced.</p>
+
+  <h3>SSRF</h3>
+  <p>Reviewed URL-controlled web-fetch paths either require configured credentials or send target URLs to third-party extraction APIs. No direct internal fetch primitive was proven.</p>
+
+  <h2>Artifacts</h2>
+  <ul>
+    <li><a href="pre_recon.md">Pre-recon</a></li>
+    <li><a href="recon.md">Live recon</a></li>
+    <li><a href="auth_evidence.md">Auth evidence</a></li>
+    <li><a href="injection_evidence.md">Injection evidence</a></li>
+    <li><a href="xss_evidence.md">XSS evidence</a></li>
+    <li><a href="ssrf_evidence.md">SSRF evidence</a></li>
+  </ul>
+</main>
+</body>
+</html>
