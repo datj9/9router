@@ -110,6 +110,7 @@ function getGroupKey(item, keyField) {
     case "accountName": return item.accountName || `Account ${item.connectionId?.slice(0, 8)}...` || "Unknown Account";
     case "keyName": return item.keyName || "Unknown Key";
     case "endpoint": return item.endpoint || "Unknown Endpoint";
+    case "projectName": return item.projectName || "Untagged";
     default: return item[keyField] || "Unknown";
   }
 }
@@ -174,10 +175,19 @@ const ENDPOINT_COLUMNS = [
   { field: "lastUsed", label: "Last Used", align: "right" },
 ];
 
+const PROJECT_COLUMNS = [
+  { field: "projectName", label: "Project" },
+  { field: "rawModel", label: "Model" },
+  { field: "provider", label: "Provider" },
+  { field: "requests", label: "Requests", align: "right" },
+  { field: "lastUsed", label: "Last Used", align: "right" },
+];
+
 const TABLE_OPTIONS = [
   { value: "model", label: "Usage by Model" },
   { value: "account", label: "Usage by Account" },
   { value: "apiKey", label: "Usage by API Key" },
+  { value: "project", label: "Usage by Project" },
   { value: "endpoint", label: "Usage by Endpoint" },
 ];
 
@@ -189,7 +199,7 @@ const PERIODS = [
   { value: "60d", label: "60D" },
 ];
 
-export default function UsageStats({ period: periodProp, setPeriod: setPeriodProp, hidePeriodSelector = false } = {}) {
+export default function UsageStats({ period: periodProp, setPeriod: setPeriodProp, hidePeriodSelector = false, defaultTableView = "model", lockTableView = false } = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -199,7 +209,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
-  const [tableView, setTableView] = useState("model");
+  const [tableView, setTableView] = useState(defaultTableView);
   const [viewMode, setViewMode] = useState("costs");
   const [providers, setProviders] = useState([]);
   const [periodLocal, setPeriodLocal] = useState("today");
@@ -346,6 +356,31 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
           ),
         };
       }
+      case "project": {
+        return {
+          columns: PROJECT_COLUMNS,
+          groupedData: groupDataByKey(sortData(stats.byProject, {}, sortBy, sortOrder), "projectName"),
+          storageKey: "usage-stats:expanded-projects",
+          emptyMessage: "No project usage recorded yet. Send the x-project header to tag requests.",
+          renderSummaryCells: (group) => (
+            <>
+              <td className="px-6 py-3 text-text-muted">—</td>
+              <td className="px-6 py-3 text-text-muted">—</td>
+              <td className="px-6 py-3 text-right">{fmt(group.summary.requests)}</td>
+              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(group.summary.lastUsed)}</td>
+            </>
+          ),
+          renderDetailCells: (item) => (
+            <>
+              <td className="px-6 py-3 font-medium">{item.projectName}</td>
+              <td className="px-6 py-3">{item.rawModel}</td>
+              <td className="px-6 py-3"><Badge variant="neutral" size="sm">{item.provider}</Badge></td>
+              <td className="px-6 py-3 text-right">{fmt(item.requests)}</td>
+              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(item.lastUsed)}</td>
+            </>
+          ),
+        };
+      }
       case "apiKey": {
         return {
           columns: API_KEY_COLUMNS,
@@ -453,16 +488,22 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       {/* Table with dropdown selector */}
       <div className="flex flex-col gap-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <select
-            value={tableView}
-            onChange={(e) => setTableView(e.target.value)}
-            className="w-full rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text-main focus:outline-none focus:ring-2 focus:ring-primary/50 sm:w-auto"
-            style={{ colorScheme: 'auto' }}
-          >
-            {TABLE_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
+          {lockTableView ? (
+            <span className="text-sm font-medium text-text-main">
+              {TABLE_OPTIONS.find((opt) => opt.value === tableView)?.label || "Usage"}
+            </span>
+          ) : (
+            <select
+              value={tableView}
+              onChange={(e) => setTableView(e.target.value)}
+              className="w-full rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text-main focus:outline-none focus:ring-2 focus:ring-primary/50 sm:w-auto"
+              style={{ colorScheme: 'auto' }}
+            >
+              {TABLE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          )}
           <div className="grid grid-cols-2 items-center gap-1 rounded-lg border border-border bg-bg-subtle p-1 sm:flex">
             <button
               onClick={() => setViewMode("costs")}
