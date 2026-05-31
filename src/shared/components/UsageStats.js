@@ -17,6 +17,7 @@ import UsageTable, { fmt, fmtTime } from "@/app/(dashboard)/dashboard/usage/comp
 import ProviderTopology from "@/app/(dashboard)/dashboard/usage/components/ProviderTopology";
 import UsageChart from "@/app/(dashboard)/dashboard/usage/components/UsageChart";
 import ApiKeyUsageChart from "@/app/(dashboard)/dashboard/usage/components/ApiKeyUsageChart";
+import ProjectModelChart from "@/app/(dashboard)/dashboard/usage/components/ProjectModelChart";
 
 function timeAgo(timestamp) {
   const diff = Math.floor((Date.now() - new Date(timestamp)) / 1000);
@@ -243,8 +244,9 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       .catch(() => {});
   }, []);
 
-  // Fetch filtered stats via REST when period changes
-  useEffect(() => {
+  // Fetch filtered stats via REST. Shared by the period effect and the manual
+  // reload button so both go through the same loading/fetching indicators.
+  const fetchStats = useCallback(() => {
     // First load: show full spinner; subsequent: show subtle fetching indicator
     if (isInitialLoad.current) {
       isInitialLoad.current = false;
@@ -253,7 +255,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       setFetching(true);
     }
 
-    fetch(`/api/usage/stats?period=${period}`)
+    return fetch(`/api/usage/stats?period=${period}`)
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
         if (data) setStats((prev) => ({ ...prev, ...data }));
@@ -263,7 +265,11 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
         setLoading(false);
         setFetching(false);
       });
-  }, [period]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [period]);
+
+  useEffect(() => {
+    fetchStats();
+  }, [fetchStats]);
 
   // SSE connection - real-time updates for activeRequests + recentRequests only
   useEffect(() => {
@@ -454,29 +460,40 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
 
   return (
     <div className="flex min-w-0 flex-col gap-6">
-      {/* Period selector (hidden when controlled by parent) */}
-      {!hidePeriodSelector && (
+      {/* Period selector (hidden when controlled by parent) + manual reload */}
+      {(!hidePeriodSelector || isProjectFocused) && (
         <div className="flex w-full items-center gap-2 sm:w-auto sm:self-end">
-          <div className="grid flex-1 grid-cols-5 items-center gap-1 rounded-lg border border-border bg-bg-subtle p-1 sm:flex sm:flex-none">
-            {PERIODS.map((p) => (
-              <button
-                key={p.value}
-                onClick={() => setPeriod(p.value)}
-                disabled={fetching}
-                className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${period === p.value ? "bg-primary text-white shadow-sm" : "text-text-muted hover:bg-bg-hover hover:text-text"}`}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-          {fetching && (
-            <span className="material-symbols-outlined text-[16px] text-text-muted animate-spin">progress_activity</span>
+          {!hidePeriodSelector && (
+            <div className="grid flex-1 grid-cols-5 items-center gap-1 rounded-lg border border-border bg-bg-subtle p-1 sm:flex sm:flex-none">
+              {PERIODS.map((p) => (
+                <button
+                  key={p.value}
+                  onClick={() => setPeriod(p.value)}
+                  disabled={fetching}
+                  className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${period === p.value ? "bg-primary text-white shadow-sm" : "text-text-muted hover:bg-bg-hover hover:text-text"}`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
           )}
+          <button
+            onClick={() => fetchStats()}
+            disabled={fetching}
+            title="Reload data"
+            className="flex items-center gap-1.5 rounded-lg border border-border bg-bg-subtle px-3 py-1.5 text-sm font-medium text-text-muted transition-colors hover:bg-bg-hover hover:text-text disabled:opacity-50"
+          >
+            <span className={`material-symbols-outlined text-[18px] ${fetching ? "animate-spin" : ""}`}>refresh</span>
+            Reload
+          </button>
         </div>
       )}
 
       {/* Overview cards */}
       {loading ? spinner : <OverviewCards stats={stats} />}
+
+      {/* Model usage by project — project-first chart */}
+      {isProjectFocused && (loading ? spinner : <ProjectModelChart byProject={stats.byProject} />)}
 
       {/* Provider topology + Recent Requests — model/provider-centric, hidden on project-first pages */}
       {!isProjectFocused && (loading ? spinner : (
