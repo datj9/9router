@@ -111,6 +111,7 @@ export const TABLES = {
       connectionId: "TEXT",
       apiKey: "TEXT",
       endpoint: "TEXT",
+      project: "TEXT",
       promptTokens: "INTEGER DEFAULT 0",
       completionTokens: "INTEGER DEFAULT 0",
       cost: "REAL DEFAULT 0",
