@@ -75,3 +75,8 @@ gitbook/README.md
 
 # Claude Code local harness
 .claude/
+
+# Local tool scratch (codegraph index, codex pentest artifacts + reports — contain secrets)
+.codegraph/
+.codex-pentest/
+report/
