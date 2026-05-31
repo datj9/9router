@@ -1,4 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+// Locality is now derived from the server bind address (HOSTNAME), not from the
+// spoofable Host header (see AUTH-VULN-01). These tests simulate the default
+// desktop deployment, which binds loopback. Saved/restored per test.
+const originalHostname = process.env.HOSTNAME;
 
 const mocks = vi.hoisted(() => ({
   nextResponse: Symbol("next"),
@@ -48,10 +53,16 @@ function request(pathname, headers = {}) {
 describe("dashboard guard public LLM API access", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.HOSTNAME = "127.0.0.1"; // loopback-bound (default desktop deploy)
     mocks.getSettings.mockResolvedValue({ requireLogin: true });
     mocks.validateApiKey.mockResolvedValue(false);
     mocks.getConsistentMachineId.mockResolvedValue("cli-token");
     mocks.verifyDashboardAuthToken.mockResolvedValue(false);
+  });
+
+  afterEach(() => {
+    if (originalHostname === undefined) delete process.env.HOSTNAME;
+    else process.env.HOSTNAME = originalHostname;
   });
 
   it("allows loopback public LLM API without API key", async () => {
@@ -63,6 +74,14 @@ describe("dashboard guard public LLM API access", () => {
 
   it("rejects remote rewritten public LLM API without API key", async () => {
     const response = await proxy(request("/api/v1/chat/completions", { host: "router.example.com" }));
+
+    expect(response.status).toBe(401);
+    expect(response.body.error).toBe("API key required for remote API access");
+  });
+
+  it("rejects spoofed Host: localhost when bound to a non-loopback interface (AUTH-VULN-01)", async () => {
+    process.env.HOSTNAME = "0.0.0.0";
+    const response = await proxy(request("/api/v1/chat/completions", { host: "localhost:20128" }));
 
     expect(response.status).toBe(401);
     expect(response.body.error).toBe("API key required for remote API access");
@@ -129,10 +148,16 @@ describe("dashboard guard public LLM API access", () => {
 describe("dashboard guard local-only access", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.HOSTNAME = "127.0.0.1"; // loopback-bound (default desktop deploy)
     mocks.getSettings.mockResolvedValue({ requireLogin: true });
     mocks.validateApiKey.mockResolvedValue(false);
     mocks.getConsistentMachineId.mockResolvedValue("cli-token");
     mocks.verifyDashboardAuthToken.mockResolvedValue(false);
+  });
+
+  afterEach(() => {
+    if (originalHostname === undefined) delete process.env.HOSTNAME;
+    else process.env.HOSTNAME = originalHostname;
   });
 
   it("rejects local-only route from non-loopback host without CLI token", async () => {
