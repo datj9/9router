@@ -309,6 +309,7 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
   if (body.temperature !== undefined) result.temperature = body.temperature;
   if (body.max_tokens !== undefined) result.max_tokens = body.max_tokens;
   if (body.top_p !== undefined) result.top_p = body.top_p;
+  if (body.reasoning_effort !== undefined) result.reasoning_effort = body.reasoning_effort;
 
   return result;
 }
