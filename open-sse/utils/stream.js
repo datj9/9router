@@ -63,6 +63,24 @@ export function createSSEStream(options = {}) {
   let sseEmittedCount = 0;
   const eventTypeCounts = {};
 
+  // Guards onStreamComplete to a single invocation. flush() runs only on clean
+  // upstream EOF; cancel() runs on client disconnect, stall-abort, or upstream
+  // error. Without finalizing on cancel(), the streaming request detail row
+  // stays stuck at "[Streaming in progress...]" with 0 tokens forever.
+  let finalized = false;
+  const finalizeOnce = (interruptedReason = null) => {
+    if (finalized) return;
+    finalized = true;
+    if (!onStreamComplete) return;
+    const finalUsage = (mode === STREAM_MODE.TRANSLATE ? state?.usage : usage) || null;
+    onStreamComplete(
+      { content: accumulatedContent, thinking: accumulatedThinking },
+      finalUsage,
+      ttftAt,
+      interruptedReason
+    );
+  };
+
   return new TransformStream({
     transform(chunk, controller) {
       if (!ttftAt) ttftAt = Date.now();
@@ -299,12 +317,7 @@ export function createSSEStream(options = {}) {
           reqLogger?.appendConvertedChunk?.(doneOutput);
           controller.enqueue(sharedEncoder.encode(doneOutput));
 
-          if (onStreamComplete) {
-            onStreamComplete({
-              content: accumulatedContent,
-              thinking: accumulatedThinking
-            }, usage, ttftAt);
-          }
+          finalizeOnce();
           return;
         }
 
@@ -361,14 +374,24 @@ export function createSSEStream(options = {}) {
           appendRequestLog({ model, provider, connectionId, tokens: null, status: "200 OK" }).catch(() => { });
         }
         
-        if (onStreamComplete) {
-          onStreamComplete({
-            content: accumulatedContent,
-            thinking: accumulatedThinking
-          }, state?.usage, ttftAt);
-        }
+        finalizeOnce();
       } catch (error) {
         console.log("Error in flush:", error);
+      }
+    },
+
+    // Fires on abnormal termination (client disconnect, stall-abort, upstream
+    // error) — flush() does NOT run in these cases. Finalize the detail row with
+    // whatever partial content/usage we accumulated so it never stays stuck at
+    // "[Streaming in progress...]".
+    cancel(reason) {
+      trackPendingRequest(model, provider, connectionId, false);
+      const reasonText = reason instanceof Error ? reason.message : String(reason ?? "stream cancelled");
+      dbg("SSE", `cancel | provider=${provider} | model=${model} | recvLines=${sseLineCount} | emitted=${sseEmittedCount} | reason=${reasonText}`);
+      try {
+        finalizeOnce(reasonText);
+      } catch (error) {
+        console.log("Error in cancel:", error);
       }
     }
   });

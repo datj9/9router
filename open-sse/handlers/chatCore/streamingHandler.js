@@ -72,12 +72,19 @@ export function buildOnStreamComplete({ provider, model, connectionId, apiKey, r
   // the completion update upserts the same row instead of inserting a duplicate.
   const streamDetailId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 
-  const onStreamComplete = (contentObj, usage, ttftAt) => {
+  // interruptedReason is set when the stream ended abnormally (client
+  // disconnect, stall-abort, upstream error) — flush() never ran, so this is
+  // the only chance to finalize the row out of "[Streaming in progress...]".
+  const onStreamComplete = (contentObj, usage, ttftAt, interruptedReason = null) => {
     const latency = {
       ttft: ttftAt ? ttftAt - requestStartTime : Date.now() - requestStartTime,
       total: Date.now() - requestStartTime
     };
-    const safeContent = contentObj?.content || "[Empty streaming response]";
+    const interrupted = Boolean(interruptedReason);
+    const fallbackContent = interrupted
+      ? `[Streaming interrupted: ${interruptedReason}]`
+      : "[Empty streaming response]";
+    const safeContent = contentObj?.content || fallbackContent;
     const safeThinking = contentObj?.thinking || null;
 
     saveRequestDetail(buildRequestDetail({
@@ -87,13 +94,16 @@ export function buildOnStreamComplete({ provider, model, connectionId, apiKey, r
       request: extractRequestConfig(body, stream),
       providerRequest: finalBody || translatedBody || null,
       providerResponse: safeContent,
-      response: { content: safeContent, thinking: safeThinking, type: "streaming" },
-      status: "success"
+      response: { content: safeContent, thinking: safeThinking, type: "streaming", interrupted: interrupted || undefined },
+      status: interrupted ? "interrupted" : "success"
     }, { id: streamDetailId, endpoint: clientRawRequest?.endpoint || null, project: clientRawRequest?.project || null })).catch(err => {
       console.error("[RequestDetail] Failed to update streaming content:", err.message);
     });
 
-    saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, project: clientRawRequest?.project, label: "STREAM USAGE" });
+    // Only record usage when the provider actually returned token counts.
+    // saveUsageStats already no-ops on 0/0, so interrupted requests with no
+    // usage won't pollute billing.
+    saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, project: clientRawRequest?.project, label: interrupted ? "STREAM INTERRUPTED" : "STREAM USAGE" });
   };
 
   return { onStreamComplete, streamDetailId };
