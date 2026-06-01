@@ -277,9 +277,11 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     return result;
   }
 
-  // Streaming response
-  const { onStreamComplete } = buildOnStreamComplete({ ...sharedCtx });
-  return handleStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, streamController, onStreamComplete });
+  // Streaming response — placeholder row and completion update must share one
+  // detail id so the upsert updates the same row instead of inserting an
+  // orphan stuck at "[Streaming in progress...]" with 0 tokens.
+  const { onStreamComplete, streamDetailId } = buildOnStreamComplete({ ...sharedCtx });
+  return handleStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, streamController, onStreamComplete, streamDetailId });
 }
 
 export function isTokenExpiringSoon(expiresAt, bufferMs = 5 * 60 * 1000) {
