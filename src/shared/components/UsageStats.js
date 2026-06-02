@@ -219,6 +219,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
   const [providers, setProviders] = useState([]);
   const [periodLocal, setPeriodLocal] = useState("today");
   const isInitialLoad = useRef(true);
+  const activeStatsController = useRef(null);
   const period = periodProp ?? periodLocal;
   const setPeriod = setPeriodProp ?? setPeriodLocal;
 
@@ -246,7 +247,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
 
   // Fetch filtered stats via REST. Shared by the period effect and the manual
   // reload button so both go through the same loading/fetching indicators.
-  const fetchStats = useCallback(() => {
+  const fetchStats = useCallback((signal) => {
     // First load: show full spinner; subsequent: show subtle fetching indicator
     if (isInitialLoad.current) {
       isInitialLoad.current = false;
@@ -255,20 +256,31 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       setFetching(true);
     }
 
-    return fetch(`/api/usage/stats?period=${period}`)
+    return fetch(`/api/usage/stats?period=${period}`, { signal })
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
-        if (data) setStats((prev) => ({ ...prev, ...data }));
+        if (data && !signal?.aborted) setStats((prev) => ({ ...prev, ...data }));
       })
-      .catch(() => {})
+      .catch((error) => {
+        if (error.name !== "AbortError") console.error("[UsageStats] fetch failed:", error);
+      })
       .finally(() => {
-        setLoading(false);
-        setFetching(false);
+        if (!signal?.aborted) {
+          setLoading(false);
+          setFetching(false);
+        }
       });
   }, [period]);
 
   useEffect(() => {
-    fetchStats();
+    activeStatsController.current?.abort();
+    const controller = new AbortController();
+    activeStatsController.current = controller;
+    fetchStats(controller.signal);
+    return () => {
+      controller.abort();
+      if (activeStatsController.current === controller) activeStatsController.current = null;
+    };
   }, [fetchStats]);
 
   // SSE connection - real-time updates for activeRequests + recentRequests only
@@ -478,7 +490,12 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
             </div>
           )}
           <button
-            onClick={() => fetchStats()}
+            onClick={() => {
+              activeStatsController.current?.abort();
+              const controller = new AbortController();
+              activeStatsController.current = controller;
+              fetchStats(controller.signal);
+            }}
             disabled={fetching}
             title="Reload data"
             className="flex items-center gap-1.5 rounded-lg border border-border bg-bg-subtle px-3 py-1.5 text-sm font-medium text-text-muted transition-colors hover:bg-bg-hover hover:text-text disabled:opacity-50"
