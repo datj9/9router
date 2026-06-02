@@ -10,6 +10,16 @@ export { COLORS, formatSSE };
 // sharedEncoder is stateless — safe to share across streams
 const sharedEncoder = new TextEncoder();
 
+// Idle keepalive. Claude with extended thinking can stream ZERO bytes for 60s+
+// while reasoning before the first token. A proxy in front of 9router
+// (Cloudflare Tunnel, nginx, etc.) sees that silence as an idle connection and
+// kills it at ~55-60s, so the request aborts before any token arrives (ttft is
+// null, 0 tokens). Emitting an SSE comment line on a timer keeps the connection
+// active. Comment lines (": ...") are ignored by every spec-compliant SSE
+// client (Anthropic/OpenAI SDKs included), so this is invisible to callers.
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000;
+const HEARTBEAT_COMMENT = ": 9router-keepalive\n\n";
+
 /**
  * Stream modes
  */
@@ -44,7 +54,8 @@ export function createSSEStream(options = {}) {
     connectionId = null,
     body = null,
     onStreamComplete = null,
-    apiKey = null
+    apiKey = null,
+    heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS
   } = options;
 
   let buffer = "";
@@ -67,10 +78,40 @@ export function createSSEStream(options = {}) {
   // upstream EOF; cancel() runs on client disconnect, stall-abort, or upstream
   // error. Without finalizing on cancel(), the streaming request detail row
   // stays stuck at "[Streaming in progress...]" with 0 tokens forever.
+  // Idle-keepalive timer. Reset on every upstream chunk; fires only when the
+  // upstream has been silent for heartbeatIntervalMs. Cleared once the stream
+  // terminates (flush or cancel) so it never outlives the connection.
+  let heartbeatTimer = null;
+  let heartbeatController = null;
+  const stopHeartbeat = () => {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  };
+  const startHeartbeat = (controller) => {
+    heartbeatController = controller;
+    if (heartbeatIntervalMs <= 0 || heartbeatTimer) return;
+    heartbeatTimer = setInterval(() => {
+      if (finalized) {
+        stopHeartbeat();
+        return;
+      }
+      try {
+        heartbeatController.enqueue(sharedEncoder.encode(HEARTBEAT_COMMENT));
+        reqLogger?.appendConvertedChunk?.(HEARTBEAT_COMMENT);
+      } catch {
+        // Controller already closed/errored — nothing left to keep alive.
+        stopHeartbeat();
+      }
+    }, heartbeatIntervalMs);
+  };
+
   let finalized = false;
   const finalizeOnce = (interruptedReason = null) => {
     if (finalized) return;
     finalized = true;
+    stopHeartbeat();
     if (!onStreamComplete) return;
     const finalUsage = (mode === STREAM_MODE.TRANSLATE ? state?.usage : usage) || null;
     onStreamComplete(
@@ -82,8 +123,18 @@ export function createSSEStream(options = {}) {
   };
 
   return new TransformStream({
+    start(controller) {
+      // Begin the idle keepalive immediately — the silent gap that kills the
+      // connection happens BEFORE the first upstream chunk arrives.
+      startHeartbeat(controller);
+    },
+
     transform(chunk, controller) {
       if (!ttftAt) ttftAt = Date.now();
+      // First real token arrived — the connection is no longer idle, so the
+      // keepalive has done its job. Stop it so we never interleave comment
+      // lines with genuine SSE data.
+      stopHeartbeat();
       const text = decoder.decode(chunk, { stream: true });
       buffer += text;
       reqLogger?.appendProviderChunk?.(text);
