@@ -25,6 +25,7 @@ export default function SegmentedControl({
     >
       {options.map((option) => (
         <button
+          type="button"
           key={option.value}
           onClick={() => onChange(option.value)}
           className={cn(

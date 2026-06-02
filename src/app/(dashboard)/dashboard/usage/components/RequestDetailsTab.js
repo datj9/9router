@@ -11,12 +11,12 @@ import { AI_PROVIDERS, getProviderByAlias } from "@/shared/constants/providers";
 let providerNameCache = null;
 let providerNodesCache = null;
 
-async function fetchProviderNames() {
+async function fetchProviderNames(signal) {
   if (providerNameCache && providerNodesCache) {
     return { providerNameCache, providerNodesCache };
   }
 
-  const nodesRes = await fetch("/api/provider-nodes");
+  const nodesRes = await fetch("/api/provider-nodes", { signal });
   const nodesData = await nodesRes.json();
   const nodes = nodesData.nodes || [];
   providerNodesCache = {};
@@ -120,23 +120,28 @@ export default function RequestDetailsTab() {
     endDate: ""
   });
 
-  const fetchProviders = useCallback(async () => {
+  const fetchProviders = useCallback(async (signal) => {
     try {
-      const res = await fetch("/api/usage/providers");
+      const res = await fetch("/api/usage/providers", { signal });
       const data = await res.json();
+      if (signal?.aborted) return;
       setProviders(data.providers || []);
 
-      const cache = await fetchProviderNames();
+      const cache = await fetchProviderNames(signal);
+      if (signal?.aborted) return;
       setProviderNameCache(cache.providerNameCache);
     } catch (error) {
-      console.error("Failed to fetch providers:", error);
+      if (error.name !== "AbortError") {
+        console.error("Failed to fetch providers:", error);
+      }
     }
   }, []);
 
-  const fetchProjects = useCallback(async () => {
+  const fetchProjects = useCallback(async (signal) => {
     try {
-      const res = await fetch("/api/usage/stats?period=all");
+      const res = await fetch("/api/usage/stats?period=all", { signal });
       const data = await res.json();
+      if (signal?.aborted) return;
       const projectNames = new Set();
       let hasUntagged = false;
 
@@ -158,11 +163,13 @@ export default function RequestDetailsTab() {
 
       setProjects(projectOptions);
     } catch (error) {
-      console.error("Failed to fetch projects:", error);
+      if (error.name !== "AbortError") {
+        console.error("Failed to fetch projects:", error);
+      }
     }
   }, []);
 
-  const fetchDetails = useCallback(async () => {
+  const fetchDetails = useCallback(async (signal) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -174,25 +181,34 @@ export default function RequestDetailsTab() {
       if (filters.startDate) params.append("startDate", filters.startDate);
       if (filters.endDate) params.append("endDate", filters.endDate);
 
-      const res = await fetch(`/api/usage/request-details?${params}`);
+      const res = await fetch(`/api/usage/request-details?${params}`, { signal });
       const data = await res.json();
+      if (signal?.aborted) return;
 
       setDetails(data.details || []);
       setPagination(prev => ({ ...prev, ...data.pagination }));
     } catch (error) {
-      console.error("Failed to fetch request details:", error);
+      if (error.name !== "AbortError") {
+        console.error("Failed to fetch request details:", error);
+      }
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
   }, [pagination.page, pagination.pageSize, filters]);
 
   useEffect(() => {
-    fetchProviders();
-    fetchProjects();
+    const controller = new AbortController();
+    fetchProviders(controller.signal);
+    fetchProjects(controller.signal);
+    return () => controller.abort();
   }, [fetchProviders, fetchProjects]);
 
   useEffect(() => {
-    fetchDetails();
+    const controller = new AbortController();
+    fetchDetails(controller.signal);
+    return () => controller.abort();
   }, [fetchDetails]);
 
   const handleViewDetail = (detail) => {
