@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // Contract locked in here:
 //  1. While upstream is silent, the transform emits heartbeat comment lines.
 //  2. Comment lines are SSE comments (start with ":") so clients ignore them.
-//  3. Once the first real chunk arrives, heartbeats stop (no interleaving).
+//  3. Heartbeats resume during later idle gaps after real chunks.
 //  4. The heartbeat timer is cleared on termination (no leak past finalize).
 
 vi.mock("@/lib/usageDb.js", () => ({
@@ -39,6 +39,47 @@ function pipeWithDelay({ firstChunkDelayMs, chunks, heartbeatIntervalMs, onStrea
         controller.close();
         return;
       }
+      controller.enqueue(encoder.encode(chunks[index++]));
+    },
+  });
+
+  const transform = createSSEStream({
+    mode: "passthrough",
+    provider: "claude",
+    model: "claude-opus-4-8",
+    connectionId: "conn-1234",
+    body: { messages: [{ role: "user", content: "hi" }] },
+    onStreamComplete,
+    apiKey: "sk-test",
+    heartbeatIntervalMs,
+  });
+
+  const readable = source.pipeThrough(transform);
+  const reader = readable.getReader();
+  const decoder = new TextDecoder();
+
+  return (async () => {
+    const received = [];
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      received.push(decoder.decode(value));
+    }
+    return received.join("");
+  })();
+}
+
+function pipeWithChunkDelays({ chunkDelaysMs, chunks, heartbeatIntervalMs, onStreamComplete }) {
+  const encoder = new TextEncoder();
+  let index = 0;
+  const source = new ReadableStream({
+    async pull(controller) {
+      if (index >= chunks.length) {
+        controller.close();
+        return;
+      }
+      const delay = chunkDelaysMs[index] || 0;
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
       controller.enqueue(encoder.encode(chunks[index++]));
     },
   });
@@ -111,6 +152,26 @@ describe("streaming idle keepalive", () => {
     });
 
     expect(output).not.toContain("9router-keepalive");
+    expect(onStreamComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits SSE comment heartbeats during idle gaps after the first token", async () => {
+    const onStreamComplete = vi.fn();
+    const output = await pipeWithChunkDelays({
+      chunkDelaysMs: [0, HEARTBEAT_INTERVAL_MS * 3, 0],
+      chunks: [
+        'data: {"choices":[{"delta":{"content":"a"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":"b"}}]}\n\n',
+        "data: [DONE]\n\n",
+      ],
+      heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
+      onStreamComplete,
+    });
+
+    const heartbeatCount = (output.match(/: 9router-keepalive/g) || []).length;
+    expect(heartbeatCount).toBeGreaterThanOrEqual(1);
+    expect(output).toContain('"content":"a"');
+    expect(output).toContain('"content":"b"');
     expect(onStreamComplete).toHaveBeenCalledTimes(1);
   });
 

@@ -15,6 +15,7 @@ import { buildRequestDetail, extractRequestConfig } from "./chatCore/requestDeta
 import { handleForcedSSEToJson } from "./chatCore/sseToJsonHandler.js";
 import { handleNonStreamingResponse } from "./chatCore/nonStreamingHandler.js";
 import { handleStreamingResponse, buildOnStreamComplete } from "./chatCore/streamingHandler.js";
+import { createJsonKeepaliveResponse } from "../utils/jsonKeepalive.js";
 import { detectClientTool, isNativePassthrough } from "../utils/clientDetector.js";
 import { dedupeTools } from "../utils/toolDeduper.js";
 import { injectCaveman } from "../rtk/caveman.js";
@@ -273,15 +274,23 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Provider forced streaming but client wants JSON
   if (!clientRequestedStreaming && providerRequiresStreaming) {
+    const contentType = providerResponse.headers.get("content-type") || "";
+    const isForcedSSE = contentType.includes("text/event-stream") || (contentType === "" && provider === "codex");
+    if (isForcedSSE) {
+      const resultPromise = handleForcedSSEToJson({ ...sharedCtx, providerResponse, sourceFormat, trackDone, appendLog })
+        .finally(() => streamController.handleComplete());
+      return await createJsonKeepaliveResponse(resultPromise);
+    }
+
     const result = await handleForcedSSEToJson({ ...sharedCtx, providerResponse, sourceFormat, trackDone, appendLog });
     if (result) { streamController.handleComplete(); return result; }
   }
 
   // True non-streaming response
   if (!stream) {
-    const result = await handleNonStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, reqLogger, toolNameMap, trackDone, appendLog });
-    streamController.handleComplete();
-    return result;
+    const resultPromise = handleNonStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, reqLogger, toolNameMap, trackDone, appendLog })
+      .finally(() => streamController.handleComplete());
+    return await createJsonKeepaliveResponse(resultPromise);
   }
 
   // Streaming response — placeholder row and completion update must share one
