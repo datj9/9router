@@ -67,6 +67,8 @@ package-lock.json
 .github/instructions/codacy.instructions.md
 README1.md
 deploy*.sh
+# Tracked deploy tooling (pairs with rollback.sh + scripts/maintenance/)
+!/deploy.sh
 ecosystem.config.*
 
 scripts/agSniffer/*
