@@ -3,7 +3,9 @@ import { FORMATS } from "../translator/formats.js";
 import { trackPendingRequest, appendRequestLog } from "@/lib/usageDb.js";
 import { extractUsage, hasValidUsage, estimateUsage, logUsage, addBufferToUsage, filterUsageForFormat, COLORS } from "./usageTracking.js";
 import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE } from "./streamHelpers.js";
+import { getOpenAIResponsesEventName, isOpenAIResponsesTerminalEvent, formatIncompleteOpenAIResponsesStreamFailure } from "./responsesStreamHelpers.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
+import { STREAM_HEARTBEAT_INTERVAL_MS } from "../config/runtimeConfig.js";
 
 export { COLORS, formatSSE };
 
@@ -17,7 +19,6 @@ const sharedEncoder = new TextEncoder();
 // null, 0 tokens). Emitting an SSE comment line on a timer keeps the connection
 // active. Comment lines (": ...") are ignored by every spec-compliant SSE
 // client (Anthropic/OpenAI SDKs included), so this is invisible to callers.
-const DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000;
 const HEARTBEAT_COMMENT = ": 9router-keepalive\n\n";
 
 /**
@@ -55,7 +56,7 @@ export function createSSEStream(options = {}) {
     body = null,
     onStreamComplete = null,
     apiKey = null,
-    heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS
+    heartbeatIntervalMs = STREAM_HEARTBEAT_INTERVAL_MS
   } = options;
 
   let buffer = "";
@@ -106,6 +107,10 @@ export function createSSEStream(options = {}) {
       }
     }, heartbeatIntervalMs);
   };
+  const resetHeartbeat = (controller) => {
+    stopHeartbeat();
+    startHeartbeat(controller);
+  };
 
   let finalized = false;
   const finalizeOnce = (interruptedReason = null) => {
@@ -122,6 +127,11 @@ export function createSSEStream(options = {}) {
     );
   };
 
+  // Track Responses API event framing for same-format passthrough (codex)
+  let currentOpenAIResponsesEvent = null;
+  let openAIResponsesTerminalSeen = false;
+  let openAIResponsesDoneSent = false;
+
   return new TransformStream({
     start(controller) {
       // Begin the idle keepalive immediately — the silent gap that kills the
@@ -131,10 +141,10 @@ export function createSSEStream(options = {}) {
 
     transform(chunk, controller) {
       if (!ttftAt) ttftAt = Date.now();
-      // First real token arrived — the connection is no longer idle, so the
-      // keepalive has done its job. Stop it so we never interleave comment
-      // lines with genuine SSE data.
-      stopHeartbeat();
+      // Reset the idle keepalive after every upstream chunk. SSE comments are
+      // legal between events and keep Cloudflare/nginx from seeing silence
+      // during later thinking gaps.
+      resetHeartbeat(controller);
       const text = decoder.decode(chunk, { stream: true });
       buffer += text;
       reqLogger?.appendProviderChunk?.(text);
@@ -150,6 +160,11 @@ export function createSSEStream(options = {}) {
             const evt = trimmed.slice(6).trim();
             eventTypeCounts[evt] = (eventTypeCounts[evt] || 0) + 1;
           }
+        }
+
+        // Capture Responses API event name to preserve framing in same-format passthrough
+        if (mode === STREAM_MODE.TRANSLATE && targetFormat === FORMATS.OPENAI_RESPONSES && trimmed.startsWith("event:")) {
+          currentOpenAIResponsesEvent = trimmed.slice(6).trim();
         }
 
         // Passthrough mode: normalize and forward
@@ -243,12 +258,33 @@ export function createSSEStream(options = {}) {
         const parsed = parseSSELine(trimmed, targetFormat);
         if (!parsed) continue;
 
+        // Responses API same-format passthrough: preserve event framing + track terminal state
+        const isOpenAIResponsesStream = targetFormat === FORMATS.OPENAI_RESPONSES;
+        const keepsOpenAIResponsesFormat = isOpenAIResponsesStream && sourceFormat === FORMATS.OPENAI_RESPONSES;
+        const openAIResponsesEventName = isOpenAIResponsesStream
+          ? getOpenAIResponsesEventName(currentOpenAIResponsesEvent, parsed)
+          : null;
+
+        if (isOpenAIResponsesStream && isOpenAIResponsesTerminalEvent(openAIResponsesEventName, parsed)) {
+          openAIResponsesTerminalSeen = true;
+        }
+
         // For Ollama: done=true is the final chunk with finish_reason/usage, must translate
         // For other formats: done=true is the [DONE] sentinel, skip
         if (parsed && parsed.done && targetFormat !== FORMATS.OLLAMA) {
+          // Synthesize response.failed if the Responses stream never sent a terminal event
+          if (keepsOpenAIResponsesFormat && !openAIResponsesTerminalSeen) {
+            const failedOutput = formatIncompleteOpenAIResponsesStreamFailure();
+            reqLogger?.appendConvertedChunk?.(failedOutput);
+            controller.enqueue(sharedEncoder.encode(failedOutput));
+            openAIResponsesTerminalSeen = true;
+            sseEmittedCount++;
+          }
+
           const output = "data: [DONE]\n\n";
           reqLogger?.appendConvertedChunk?.(output);
           controller.enqueue(sharedEncoder.encode(output));
+          if (keepsOpenAIResponsesFormat) openAIResponsesDoneSent = true;
           continue;
         }
 
@@ -293,6 +329,18 @@ export function createSSEStream(options = {}) {
         const extracted = extractUsage(parsed);
         if (extracted) state.usage = extracted; // Keep original usage for logging
 
+        // Responses same-format passthrough: re-emit with original event framing
+        if (keepsOpenAIResponsesFormat && openAIResponsesEventName) {
+          const output = formatSSE({ event: openAIResponsesEventName, data: parsed }, sourceFormat);
+          reqLogger?.appendConvertedChunk?.(output);
+          controller.enqueue(sharedEncoder.encode(output));
+          currentOpenAIResponsesEvent = null;
+          sseEmittedCount++;
+          continue;
+        }
+
+        currentOpenAIResponsesEvent = null;
+
         // Translate: targetFormat -> openai -> sourceFormat
         const translated = translateResponse(targetFormat, sourceFormat, parsed, state);
 
@@ -306,6 +354,7 @@ export function createSSEStream(options = {}) {
 
         if (translated?.length > 0) {
           for (const item of translated) {
+            if (item === null || item === undefined) continue;
             // Filter empty chunks
             if (!hasValuableContent(item, sourceFormat)) {
               continue; // Skip this empty chunk
@@ -386,6 +435,7 @@ export function createSSEStream(options = {}) {
 
             if (translated?.length > 0) {
               for (const item of translated) {
+                if (item === null || item === undefined) continue;
                 const output = formatSSE(item, sourceFormat);
                 reqLogger?.appendConvertedChunk?.(output);
                 controller.enqueue(sharedEncoder.encode(output));
@@ -405,15 +455,27 @@ export function createSSEStream(options = {}) {
 
         if (flushed?.length > 0) {
           for (const item of flushed) {
+            if (item === null || item === undefined) continue;
             const output = formatSSE(item, sourceFormat);
             reqLogger?.appendConvertedChunk?.(output);
             controller.enqueue(sharedEncoder.encode(output));
           }
         }
 
-        const doneOutput = "data: [DONE]\n\n";
-        reqLogger?.appendConvertedChunk?.(doneOutput);
-        controller.enqueue(sharedEncoder.encode(doneOutput));
+        // Synthesize response.failed if a Responses passthrough stream never reached a terminal event
+        const keepsOpenAIResponsesFormat = targetFormat === FORMATS.OPENAI_RESPONSES && sourceFormat === FORMATS.OPENAI_RESPONSES;
+        if (keepsOpenAIResponsesFormat && !openAIResponsesTerminalSeen) {
+          const failedOutput = formatIncompleteOpenAIResponsesStreamFailure();
+          reqLogger?.appendConvertedChunk?.(failedOutput);
+          controller.enqueue(sharedEncoder.encode(failedOutput));
+          openAIResponsesTerminalSeen = true;
+        }
+
+        if (!keepsOpenAIResponsesFormat || !openAIResponsesDoneSent) {
+          const doneOutput = "data: [DONE]\n\n";
+          reqLogger?.appendConvertedChunk?.(doneOutput);
+          controller.enqueue(sharedEncoder.encode(doneOutput));
+        }
 
         if (!hasValidUsage(state?.usage) && totalContentLength > 0) {
           state.usage = estimateUsage(body, totalContentLength, sourceFormat);

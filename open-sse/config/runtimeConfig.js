@@ -31,11 +31,26 @@ export const MEMORY_CONFIG = {
   proxyDispatchersMaxSize: 20,
 };
 
-// Stream stall timeout: abort if no chunk received within this duration
-export const STREAM_STALL_TIMEOUT_MS = 30 * 1000;
+function envPositiveInt(name, fallback) {
+  const raw = process.env[name];
+  if (raw == null || raw === "") return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+// Stream stall timeout: abort if no upstream bytes arrive within this duration.
+// Reasoning providers can legally stay silent for 60s+ while thinking, so keep
+// this well above common proxy read timeouts; downstream keepalives handle proxy
+// idleness separately.
+export const STREAM_STALL_TIMEOUT_MS = envPositiveInt("STREAM_STALL_TIMEOUT_MS", 5 * 60 * 1000);
+
+// Downstream keepalive cadence. SSE uses comment events; JSON uses leading
+// whitespace, which remains valid before the final JSON document.
+export const STREAM_HEARTBEAT_INTERVAL_MS = envPositiveInt("STREAM_HEARTBEAT_INTERVAL_MS", 10 * 1000);
+export const JSON_KEEPALIVE_INTERVAL_MS = envPositiveInt("JSON_KEEPALIVE_INTERVAL_MS", 10 * 1000);
 
 // Fetch connect timeout: abort if upstream doesn't return response headers within this duration
-export const FETCH_CONNECT_TIMEOUT_MS = 20 * 1000;
+export const FETCH_CONNECT_TIMEOUT_MS = 60 * 1000;
 
 // Default token limits
 export const DEFAULT_MAX_TOKENS = 64000;
