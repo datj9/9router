@@ -7,13 +7,14 @@ FROM base AS builder
 
 RUN apk --no-cache upgrade && apk --no-cache add python3 make g++ linux-headers
 
-COPY package.json ./
+COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
-  npm install
+  npm ci
 
 COPY . ./
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN npm run build
+RUN --mount=type=cache,target=/app/.next/cache \
+  npm run build
 
 FROM ${NODE_IMAGE} AS runner
 WORKDIR /app
@@ -26,20 +27,22 @@ ENV HOSTNAME=0.0.0.0
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV DATA_DIR=/app/data
 
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next/static ./.next/static
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/open-sse ./open-sse
+# --chown at copy time sets node:node ownership directly, avoiding a slow
+# recursive `chown -R /app` over thousands of node_modules/next files each build.
+COPY --from=builder --chown=node:node /app/public ./public
+COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+COPY --from=builder --chown=node:node /app/.next/standalone ./
+COPY --from=builder --chown=node:node /app/open-sse ./open-sse
 # Next file tracing can omit sibling files; MITM runs server.js as a separate process.
-COPY --from=builder /app/src/mitm ./src/mitm
+COPY --from=builder --chown=node:node /app/src/mitm ./src/mitm
 # Standalone node_modules may omit deps only required by the MITM child process.
-COPY --from=builder /app/node_modules/node-forge ./node_modules/node-forge
+COPY --from=builder --chown=node:node /app/node_modules/node-forge ./node_modules/node-forge
 # Ensure `next` is available at runtime in case tracing did not include it.
-COPY --from=builder /app/node_modules/next ./node_modules/next
+COPY --from=builder --chown=node:node /app/node_modules/next ./node_modules/next
 # nodemailer is loaded via dynamic import for SMTP email; tracing can miss it.
-COPY --from=builder /app/node_modules/nodemailer ./node_modules/nodemailer
+COPY --from=builder --chown=node:node /app/node_modules/nodemailer ./node_modules/nodemailer
 
-RUN mkdir -p /app/data && chown -R node:node /app && \
+RUN mkdir -p /app/data && chown node:node /app /app/data && \
   mkdir -p /app/data-home && chown node:node /app/data-home && \
   ln -sf /app/data-home /root/.9router 2>/dev/null || true
 

@@ -5,6 +5,7 @@ import { extractUsage, hasValidUsage, estimateUsage, logUsage, addBufferToUsage,
 import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE } from "./streamHelpers.js";
 import { getOpenAIResponsesEventName, isOpenAIResponsesTerminalEvent, formatIncompleteOpenAIResponsesStreamFailure } from "./responsesStreamHelpers.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
+import { STREAM_HEARTBEAT_INTERVAL_MS } from "../config/runtimeConfig.js";
 
 export { COLORS, formatSSE };
 
@@ -18,7 +19,6 @@ const sharedEncoder = new TextEncoder();
 // null, 0 tokens). Emitting an SSE comment line on a timer keeps the connection
 // active. Comment lines (": ...") are ignored by every spec-compliant SSE
 // client (Anthropic/OpenAI SDKs included), so this is invisible to callers.
-const DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000;
 const HEARTBEAT_COMMENT = ": 9router-keepalive\n\n";
 
 /**
@@ -56,7 +56,7 @@ export function createSSEStream(options = {}) {
     body = null,
     onStreamComplete = null,
     apiKey = null,
-    heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS
+    heartbeatIntervalMs = STREAM_HEARTBEAT_INTERVAL_MS
   } = options;
 
   let buffer = "";
@@ -107,6 +107,10 @@ export function createSSEStream(options = {}) {
       }
     }, heartbeatIntervalMs);
   };
+  const resetHeartbeat = (controller) => {
+    stopHeartbeat();
+    startHeartbeat(controller);
+  };
 
   let finalized = false;
   const finalizeOnce = (interruptedReason = null) => {
@@ -137,10 +141,10 @@ export function createSSEStream(options = {}) {
 
     transform(chunk, controller) {
       if (!ttftAt) ttftAt = Date.now();
-      // First real token arrived — the connection is no longer idle, so the
-      // keepalive has done its job. Stop it so we never interleave comment
-      // lines with genuine SSE data.
-      stopHeartbeat();
+      // Reset the idle keepalive after every upstream chunk. SSE comments are
+      // legal between events and keep Cloudflare/nginx from seeing silence
+      // during later thinking gaps.
+      resetHeartbeat(controller);
       const text = decoder.decode(chunk, { stream: true });
       buffer += text;
       reqLogger?.appendProviderChunk?.(text);
