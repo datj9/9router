@@ -65,6 +65,7 @@ export default function ProjectModelChart({ byProject }) {
     const entries = Object.values(byProject || {});
     const modelSet = new Set();
     const projectRows = {};
+    const projectEntries = {};
 
     for (const entry of entries) {
       const projectName = entry.projectName || "Untagged";
@@ -73,16 +74,33 @@ export default function ProjectModelChart({ byProject }) {
 
       if (!projectRows[projectName]) projectRows[projectName] = { project: projectName };
       projectRows[projectName][model] = (projectRows[projectName][model] || 0) + metricValue(entry, metric);
+      projectEntries[projectName] ??= [];
+      projectEntries[projectName].push(entry);
     }
 
     const orderedModels = [...modelSet].sort((first, second) => first.localeCompare(second));
 
-    // Sort projects by their total for the active metric, busiest first.
-    const rows = Object.values(projectRows).sort((first, second) => {
-      const firstTotal = orderedModels.reduce((sum, model) => sum + (first[model] || 0), 0);
-      const secondTotal = orderedModels.reduce((sum, model) => sum + (second[model] || 0), 0);
-      return secondTotal - firstTotal;
+    // Drop projects that are zero on any of requests / tokens / cost —
+    // typical for tokens-without-pricing rows that show as 0-cost bars.
+    const nonEmptyProjects = Object.entries(projectRows).filter(([projectName]) => {
+      const rows = projectEntries[projectName] || [];
+      const totalRequests = rows.reduce((sum, e) => sum + (e.requests || 0), 0);
+      const totalTokens = rows.reduce(
+        (sum, e) => sum + (e.promptTokens || 0) + (e.completionTokens || 0),
+        0,
+      );
+      const totalCost = rows.reduce((sum, e) => sum + (e.cost || 0), 0);
+      return totalRequests > 0 && totalTokens > 0 && totalCost > 0;
     });
+
+    // Sort projects by their total for the active metric, busiest first.
+    const rows = nonEmptyProjects
+      .map(([projectName, row]) => row)
+      .sort((first, second) => {
+        const firstTotal = orderedModels.reduce((sum, model) => sum + (first[model] || 0), 0);
+        const secondTotal = orderedModels.reduce((sum, model) => sum + (second[model] || 0), 0);
+        return secondTotal - firstTotal;
+      });
 
     return { chartData: rows, models: orderedModels };
   }, [byProject, metric]);
