@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { deleteApiKey, getApiKeyById, updateApiKey } from "@/lib/localDb";
+import { validateKeyMetadata } from "@/lib/apiKeys/validation";
 
 // GET /api/keys/[id] - Get single key
 export async function GET(request, { params }) {
@@ -21,15 +22,24 @@ export async function PUT(request, { params }) {
   try {
     const { id } = await params;
     const body = await request.json();
-    const { isActive } = body;
+    const { isActive, name, managerEmail, managerName, expiresAt } = body;
 
     const existing = await getApiKeyById(id);
     if (!existing) {
       return NextResponse.json({ error: "Key not found" }, { status: 404 });
     }
 
+    const validationError = validateKeyMetadata({ managerEmail, expiresAt });
+    if (validationError) {
+      return NextResponse.json({ error: validationError }, { status: 400 });
+    }
+
     const updateData = {};
     if (isActive !== undefined) updateData.isActive = isActive;
+    if (name !== undefined) updateData.name = name;
+    if (managerEmail !== undefined) updateData.managerEmail = managerEmail?.trim() || null;
+    if (managerName !== undefined) updateData.managerName = managerName?.trim() || null;
+    if (expiresAt !== undefined) updateData.expiresAt = expiresAt || null;
 
     const updated = await updateApiKey(id, updateData);
 

@@ -1,5 +1,5 @@
 // Latest schema version — bumped when a migration is added in ./migrations/
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -79,6 +79,11 @@ export const TABLES = {
       machineId: "TEXT",
       isActive: "INTEGER DEFAULT 1",
       createdAt: "TEXT NOT NULL",
+      managerEmail: "TEXT",
+      managerName: "TEXT",
+      expiresAt: "TEXT",
+      rotatedAt: "TEXT",
+      lastNotifiedAt: "TEXT",
     },
     indexes: ["CREATE INDEX IF NOT EXISTS idx_ak_key ON apiKeys(key)"],
   },
@@ -111,6 +116,7 @@ export const TABLES = {
       connectionId: "TEXT",
       apiKey: "TEXT",
       endpoint: "TEXT",
+      project: "TEXT",
       promptTokens: "INTEGER DEFAULT 0",
       completionTokens: "INTEGER DEFAULT 0",
       cost: "REAL DEFAULT 0",
@@ -138,6 +144,7 @@ export const TABLES = {
       provider: "TEXT",
       model: "TEXT",
       connectionId: "TEXT",
+      project: "TEXT",
       status: "TEXT",
       data: "TEXT NOT NULL",
     },
@@ -146,6 +153,7 @@ export const TABLES = {
       "CREATE INDEX IF NOT EXISTS idx_rd_provider ON requestDetails(provider)",
       "CREATE INDEX IF NOT EXISTS idx_rd_model ON requestDetails(model)",
       "CREATE INDEX IF NOT EXISTS idx_rd_conn ON requestDetails(connectionId)",
+      "CREATE INDEX IF NOT EXISTS idx_rd_project ON requestDetails(project)",
     ],
   },
 };

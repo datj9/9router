@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { getMeta, setMeta } from "../helpers/metaStore.js";
+import { getLocalDateKey, aggregateEntryToDay } from "../helpers/aggregate.js";
 
 const PENDING_TIMEOUT_MS = 60 * 1000;
 const RING_CAP = 50;
@@ -26,55 +27,6 @@ const recentRing = global._recentRing;
 const connCache = global._connectionMapCache;
 
 export const statsEmitter = global._statsEmitter;
-
-function getLocalDateKey(timestamp) {
-  const d = timestamp ? new Date(timestamp) : new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function addToCounter(target, key, values) {
-  if (!target[key]) target[key] = { requests: 0, promptTokens: 0, completionTokens: 0, cost: 0 };
-  target[key].requests += values.requests || 1;
-  target[key].promptTokens += values.promptTokens || 0;
-  target[key].completionTokens += values.completionTokens || 0;
-  target[key].cost += values.cost || 0;
-  if (values.meta) Object.assign(target[key], values.meta);
-}
-
-function aggregateEntryToDay(day, entry) {
-  const promptTokens = entry.tokens?.prompt_tokens || entry.tokens?.input_tokens || 0;
-  const completionTokens = entry.tokens?.completion_tokens || entry.tokens?.output_tokens || 0;
-  const cost = entry.cost || 0;
-  const vals = { promptTokens, completionTokens, cost };
-
-  day.requests = (day.requests || 0) + 1;
-  day.promptTokens = (day.promptTokens || 0) + promptTokens;
-  day.completionTokens = (day.completionTokens || 0) + completionTokens;
-  day.cost = (day.cost || 0) + cost;
-
-  day.byProvider ||= {};
-  day.byModel ||= {};
-  day.byAccount ||= {};
-  day.byApiKey ||= {};
-  day.byEndpoint ||= {};
-
-  if (entry.provider) addToCounter(day.byProvider, entry.provider, vals);
-
-  const modelKey = entry.provider ? `${entry.model}|${entry.provider}` : entry.model;
-  addToCounter(day.byModel, modelKey, { ...vals, meta: { rawModel: entry.model, provider: entry.provider } });
-
-  if (entry.connectionId) {
-    addToCounter(day.byAccount, entry.connectionId, { ...vals, meta: { rawModel: entry.model, provider: entry.provider } });
-  }
-
-  const apiKeyVal = entry.apiKey && typeof entry.apiKey === "string" ? entry.apiKey : "local-no-key";
-  const akModelKey = `${apiKeyVal}|${entry.model}|${entry.provider || "unknown"}`;
-  addToCounter(day.byApiKey, akModelKey, { ...vals, meta: { rawModel: entry.model, provider: entry.provider, apiKey: entry.apiKey || null } });
-
-  const endpoint = entry.endpoint || "Unknown";
-  const epKey = `${endpoint}|${entry.model}|${entry.provider || "unknown"}`;
-  addToCounter(day.byEndpoint, epKey, { ...vals, meta: { endpoint, rawModel: entry.model, provider: entry.provider } });
-}
 
 function pushToRing(entry) {
   recentRing.items.push(entry);
@@ -255,10 +207,11 @@ export async function saveRequestUsage(entry) {
     // better-sqlite3 is sync → no JS yield mid-transaction → no race in same process.
     db.transaction(() => {
       db.run(
-        `INSERT INTO usageHistory(timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, status, tokens, meta) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO usageHistory(timestamp, provider, model, connectionId, apiKey, endpoint, project, promptTokens, completionTokens, cost, status, tokens, meta) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           entry.timestamp, entry.provider || null, entry.model || null,
           entry.connectionId || null, entry.apiKey || null, entry.endpoint || null,
+          entry.project || null,
           promptTokens, completionTokens, entry.cost || 0, entry.status || "ok",
           stringifyJson(tokens), stringifyJson({}),
         ]
@@ -367,7 +320,7 @@ export async function getUsageStats(period = "all") {
   const stats = {
     totalRequests: 0,
     totalPromptTokens: 0, totalCompletionTokens: 0, totalCost: 0,
-    byProvider: {}, byModel: {}, byAccount: {}, byApiKey: {}, byEndpoint: {},
+    byProvider: {}, byModel: {}, byAccount: {}, byApiKey: {}, byEndpoint: {}, byProject: {}, byApiKeyProject: {},
     last10Minutes: [],
     pending: pendingRequests,
     activeRequests: [],
@@ -500,12 +453,42 @@ export async function getUsageStats(period = "all") {
         stats.byEndpoint[epKey].cost += ep.cost || 0;
         if (dateKey > (stats.byEndpoint[epKey].lastUsed || "")) stats.byEndpoint[epKey].lastUsed = dateKey;
       }
+
+      for (const [projectKey, pr] of Object.entries(day.byProject || {})) {
+        const rawModel = pr.rawModel || "";
+        const provider = pr.provider || "";
+        const providerDisplayName = providerNodeNameMap[provider] || provider;
+        const projectName = pr.project || "Untagged";
+        if (!stats.byProject[projectKey]) {
+          stats.byProject[projectKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cost: 0, rawModel, provider: providerDisplayName, project: pr.project || null, projectName, lastUsed: dateKey };
+        }
+        stats.byProject[projectKey].requests += pr.requests || 0;
+        stats.byProject[projectKey].promptTokens += pr.promptTokens || 0;
+        stats.byProject[projectKey].completionTokens += pr.completionTokens || 0;
+        stats.byProject[projectKey].cost += pr.cost || 0;
+        if (dateKey > (stats.byProject[projectKey].lastUsed || "")) stats.byProject[projectKey].lastUsed = dateKey;
+      }
+
+      for (const [akpKey, akp] of Object.entries(day.byApiKeyProject || {})) {
+        const apiKeyVal = akp.apiKey;
+        const keyInfo = apiKeyVal ? apiKeyMap[apiKeyVal] : null;
+        const keyName = keyInfo?.name || (apiKeyVal ? apiKeyVal.slice(0, 8) + "..." : "Local (No API Key)");
+        const projectName = akp.project || "Untagged";
+        if (!stats.byApiKeyProject[akpKey]) {
+          stats.byApiKeyProject[akpKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cost: 0, apiKey: apiKeyVal || null, keyName, project: akp.project || null, projectName, lastUsed: dateKey };
+        }
+        stats.byApiKeyProject[akpKey].requests += akp.requests || 0;
+        stats.byApiKeyProject[akpKey].promptTokens += akp.promptTokens || 0;
+        stats.byApiKeyProject[akpKey].completionTokens += akp.completionTokens || 0;
+        stats.byApiKeyProject[akpKey].cost += akp.cost || 0;
+        if (dateKey > (stats.byApiKeyProject[akpKey].lastUsed || "")) stats.byApiKeyProject[akpKey].lastUsed = dateKey;
+      }
     }
 
     // Overlay precise lastUsed timestamps from history
     const overlayCutoff = maxDays ? Date.now() - maxDays * 86400000 : 0;
     const histRows = db.all(
-      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint FROM usageHistory WHERE timestamp >= ?`,
+      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, project FROM usageHistory WHERE timestamp >= ?`,
       [new Date(overlayCutoff).toISOString()]
     );
     for (const e of histRows) {
@@ -527,6 +510,10 @@ export async function getUsageStats(period = "all") {
       const endpoint = e.endpoint || "Unknown";
       const endpointKey = `${endpoint}|${e.model}|${e.provider || "unknown"}`;
       if (stats.byEndpoint[endpointKey] && new Date(ts) > new Date(stats.byEndpoint[endpointKey].lastUsed)) stats.byEndpoint[endpointKey].lastUsed = ts;
+
+      const projectKeySegment = (e.project && typeof e.project === "string") ? e.project : "__untagged__";
+      const projectKey = `${projectKeySegment}|${e.model}|${e.provider || "unknown"}`;
+      if (stats.byProject[projectKey] && new Date(ts) > new Date(stats.byProject[projectKey].lastUsed)) stats.byProject[projectKey].lastUsed = ts;
     }
   } else {
     // 24h / today: live history
@@ -539,7 +526,7 @@ export async function getUsageStats(period = "all") {
       cutoff = new Date(Date.now() - PERIOD_MS["24h"]).toISOString();
     }
     const filtered = db.all(
-      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, tokens FROM usageHistory WHERE timestamp >= ?`,
+      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, project, promptTokens, completionTokens, cost, tokens FROM usageHistory WHERE timestamp >= ?`,
       [cutoff]
     );
 
@@ -610,6 +597,26 @@ export async function getUsageStats(period = "all") {
       const epe = stats.byEndpoint[epKey];
       epe.requests++; epe.promptTokens += promptTokens; epe.completionTokens += completionTokens; epe.cost += entryCost;
       if (new Date(r.timestamp) > new Date(epe.lastUsed)) epe.lastUsed = r.timestamp;
+
+      const projectValue = (r.project && typeof r.project === "string") ? r.project : null;
+      const projectKey = `${projectValue || "__untagged__"}|${r.model}|${r.provider || "unknown"}`;
+      if (!stats.byProject[projectKey]) {
+        stats.byProject[projectKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cost: 0, rawModel: r.model, provider: providerDisplayName, project: projectValue, projectName: projectValue || "Untagged", lastUsed: r.timestamp };
+      }
+      const projectEntry = stats.byProject[projectKey];
+      projectEntry.requests++; projectEntry.promptTokens += promptTokens; projectEntry.completionTokens += completionTokens; projectEntry.cost += entryCost;
+      if (new Date(r.timestamp) > new Date(projectEntry.lastUsed)) projectEntry.lastUsed = r.timestamp;
+
+      const apiKeyValForProject = (r.apiKey && typeof r.apiKey === "string") ? r.apiKey : null;
+      const akpProjectName = projectValue || "Untagged";
+      const akpKeyName = apiKeyValForProject ? (apiKeyMap[apiKeyValForProject]?.name || apiKeyValForProject.slice(0, 8) + "...") : "Local (No API Key)";
+      const akpKey = `${apiKeyValForProject || "local-no-key"}|${projectValue || "__untagged__"}`;
+      if (!stats.byApiKeyProject[akpKey]) {
+        stats.byApiKeyProject[akpKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cost: 0, apiKey: apiKeyValForProject, keyName: akpKeyName, project: projectValue, projectName: akpProjectName, lastUsed: r.timestamp };
+      }
+      const akpEntry = stats.byApiKeyProject[akpKey];
+      akpEntry.requests++; akpEntry.promptTokens += promptTokens; akpEntry.completionTokens += completionTokens; akpEntry.cost += entryCost;
+      if (new Date(r.timestamp) > new Date(akpEntry.lastUsed)) akpEntry.lastUsed = r.timestamp;
     }
   }
 

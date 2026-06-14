@@ -83,13 +83,29 @@ const LOCAL_ONLY_PATHS = [
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
-function isLoopbackHostname(h) {
-  if (!h) return false;
-  const name = h.split(":")[0].replace(/^\[|\]$/g, "").toLowerCase();
+function isLoopbackHostname(hostname) {
+  if (!hostname) return false;
+  const name = hostname.split(":")[0].replace(/^\[|\]$/g, "").toLowerCase();
   return LOOPBACK_HOSTS.has(name);
 }
 
+// True only when the server is bound to a loopback-only interface, in which
+// case every incoming request necessarily originates from this host. The bind
+// address comes from runtime config (HOSTNAME), NOT from client-controlled
+// headers — a request's Host header names the requested vhost, not the peer.
+// When bound to 0.0.0.0 / a routable IP (or HOSTNAME is unset, where Next
+// defaults to 0.0.0.0), locality cannot be proven, so this returns false.
+function isLoopbackBound() {
+  const bindAddress = process.env.HOSTNAME;
+  if (!bindAddress) return false;
+  return isLoopbackHostname(bindAddress);
+}
+
+// A request is local only when the server is loopback-bound. The Host/Origin
+// header checks remain as defense-in-depth (CSRF / cross-origin), but are never
+// sufficient on their own — see isLoopbackBound().
 export function isLocalRequest(request) {
+  if (!isLoopbackBound()) return false;
   if (!isLoopbackHostname(request.headers.get("host"))) return false;
   const origin = request.headers.get("origin");
   if (origin) {
@@ -156,6 +172,7 @@ function isPublicApi(pathname) {
 }
 
 export const __test__ = {
+  isLoopbackBound,
   isLocalRequest,
   isPublicLlmApi,
   extractApiKey,
