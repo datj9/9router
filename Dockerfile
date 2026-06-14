@@ -32,6 +32,7 @@ ENV DATA_DIR=/app/data
 COPY --from=builder --chown=node:node /app/public ./public
 COPY --from=builder --chown=node:node /app/.next/static ./.next/static
 COPY --from=builder --chown=node:node /app/.next/standalone ./
+COPY --from=builder --chown=node:node /app/custom-server.js ./custom-server.js
 COPY --from=builder --chown=node:node /app/open-sse ./open-sse
 # Next file tracing can omit sibling files; MITM runs server.js as a separate process.
 COPY --from=builder --chown=node:node /app/src/mitm ./src/mitm
@@ -54,4 +55,4 @@ RUN apk --no-cache upgrade && apk --no-cache add su-exec && \
 EXPOSE 20128
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["node", "server.js"]
+CMD ["node", "custom-server.js"]

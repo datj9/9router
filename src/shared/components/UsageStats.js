@@ -220,15 +220,23 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
   const [periodLocal, setPeriodLocal] = useState("today");
   const isInitialLoad = useRef(true);
   const activeStatsController = useRef(null);
+  const hasLoadedStats = useRef(false);
   const period = periodProp ?? periodLocal;
   const setPeriod = setPeriodProp ?? setPeriodLocal;
 
   // Fetch connected providers once, deduplicate by provider type
   // Always include noAuth free providers (e.g. opencode) regardless of connections
   useEffect(() => {
-    fetch("/api/providers")
-      .then((r) => r.ok ? r.json() : null)
-      .then((d) => {
+    Promise.all([
+      fetch("/api/providers").then((r) => r.ok ? r.json() : null),
+      fetch("/api/provider-nodes").then((r) => r.ok ? r.json() : null),
+    ])
+      .then(([d, nodesData]) => {
+        // Build node name lookup for custom providers
+        const nodeNameMap = {};
+        for (const node of (nodesData?.nodes || [])) {
+          nodeNameMap[node.id] = node.name;
+        }
         const seen = new Set();
         const unique = (d?.connections || []).filter((c) => {
           if (c.isActive === false) return false;
@@ -236,7 +244,10 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
           if (seen.has(c.provider)) return false;
           seen.add(c.provider);
           return true;
-        });
+        }).map((c) => ({
+          ...c,
+          nodeName: nodeNameMap[c.provider] || null,
+        }));
         const noAuthProviders = Object.values(FREE_PROVIDERS)
           .filter((p) => p.noAuth && !seen.has(p.id) && isLLMProvider(p.id))
           .map((p) => ({ provider: p.id, name: p.name }));
@@ -259,7 +270,10 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
     return fetch(`/api/usage/stats?period=${period}`, { signal })
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
-        if (data && !signal?.aborted) setStats((prev) => ({ ...prev, ...data }));
+        if (data && !signal?.aborted) {
+          hasLoadedStats.current = true;
+          setStats((prev) => ({ ...prev, ...data }));
+        }
       })
       .catch((error) => {
         if (error.name !== "AbortError") console.error("[UsageStats] fetch failed:", error);
@@ -291,14 +305,17 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       try {
         const data = JSON.parse(e.data);
         // Always merge only real-time fields, never overwrite full stats from REST
-        setStats((prev) => ({
-          ...(prev || {}),
-          activeRequests: data.activeRequests,
-          recentRequests: data.recentRequests,
-          errorProvider: data.errorProvider,
-          pending: data.pending,
-        }));
-        setLoading(false);
+        setStats((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            activeRequests: data.activeRequests,
+            recentRequests: data.recentRequests,
+            errorProvider: data.errorProvider,
+            pending: data.pending,
+          };
+        });
+        if (hasLoadedStats.current) setLoading(false);
       } catch (err) {
         console.error("[SSE CLIENT] parse error:", err);
       }
