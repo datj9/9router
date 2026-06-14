@@ -45,22 +45,16 @@ export function recordSuccess(ip) {
   attempts.delete(ip);
 }
 
-// Identifier used to bucket login attempts when the client IP cannot be
-// trusted. All untrusted attempts share this single bucket so an attacker
-// cannot reset their own lockout by rotating X-Forwarded-For / X-Real-IP.
-const UNTRUSTED_BUCKET = "untrusted";
-
-// X-Forwarded-For / X-Real-IP are client-controlled and spoofable. They are
-// only meaningful when a trusted reverse proxy sets them, so honor them solely
-// when NINE_ROUTER_TRUSTED_PROXY is explicitly enabled for such a deployment.
-function trustsProxyHeaders() {
-  const trustedProxy = process.env.NINE_ROUTER_TRUSTED_PROXY;
-  return trustedProxy === "1" || trustedProxy === "true";
-}
-
 export function getClientIp(request) {
-  if (!trustsProxyHeaders()) return UNTRUSTED_BUCKET;
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  if (forwardedFor) return forwardedFor.split(",")[0].trim();
-  return request.headers.get("x-real-ip") || UNTRUSTED_BUCKET;
+  // Trusted: set from TCP socket by custom-server.js (client cannot spoof).
+  const realIp = request.headers.get("x-9r-real-ip");
+  if (realIp) return realIp;
+  // Behind a trusted reverse proxy that overwrites XFF with the real client IP.
+  if (process.env.TRUST_PROXY === "true") {
+    const xff = request.headers.get("x-forwarded-for");
+    if (xff) return xff.split(",")[0].trim();
+  }
+  // Direct exposure without custom-server: single bucket so spoofed XFF
+  // rotation cannot escape the limiter.
+  return "unknown";
 }

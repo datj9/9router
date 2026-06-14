@@ -78,6 +78,7 @@ const LOCAL_ONLY_PATHS = [
   "/api/tunnel/disable",
   "/api/oauth/cursor/auto-import",
   "/api/oauth/kiro/auto-import",
+  "/api/auth/reset-password",
 ];
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
@@ -103,7 +104,7 @@ function isLoopbackBound() {
 // A request is local only when the server is loopback-bound. The Host/Origin
 // header checks remain as defense-in-depth (CSRF / cross-origin), but are never
 // sufficient on their own — see isLoopbackBound().
-function isLocalRequest(request) {
+export function isLocalRequest(request) {
   if (!isLoopbackBound()) return false;
   if (!isLoopbackHostname(request.headers.get("host"))) return false;
   const origin = request.headers.get("origin");
