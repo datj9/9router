@@ -26,6 +26,14 @@ import { compressMessages, formatRtkLog } from "../rtk/index.js";
 // haiku/sonnet upstreams reject it with 400 invalid_request_error.
 const isEffortCapableClaude = (model = "") => /opus-4-(6|7|8)/.test(model);
 
+// Sampling params (temperature/top_p/top_k) are removed on Opus 4.7+, Opus 4.8,
+// and Fable 5 — these models reject them with 400 invalid_request_error
+// ("`temperature` is deprecated"). Opus 4.6 and earlier (and sonnet/haiku) still
+// accept them, so the strip must stay version-scoped.
+const SAMPLING_PARAMS = ["temperature", "top_p", "top_k"];
+const rejectsSamplingParams = (...models) =>
+  models.some((model = "") => /opus-4-(7|8)|fable-5/.test(model));
+
 /**
  * Core chat handler - shared between SSE and Worker
  * @param {object} options.body - Request body
@@ -127,6 +135,17 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   if (finalFormat === "claude" && translatedBody.effort != null && !isEffortCapableClaude(model)) {
     delete translatedBody.effort;
     log?.debug?.("EFFORT", `stripped unsupported effort for ${model}`);
+  }
+
+  // Strip sampling params (temperature/top_p/top_k) for Opus 4.7+/4.8/Fable 5,
+  // which reject them with 400 ("`temperature` is deprecated"). Covers both the
+  // native passthrough body (Claude Code sends temperature) and translated bodies.
+  if (finalFormat === "claude" && rejectsSamplingParams(model, upstreamModel)) {
+    const stripped = SAMPLING_PARAMS.filter((param) => translatedBody[param] != null);
+    if (stripped.length > 0) {
+      for (const param of stripped) delete translatedBody[param];
+      log?.debug?.("SAMPLING", `stripped ${stripped.join(", ")} unsupported for ${model}`);
+    }
   }
 
   // TTS models don't support tool messages/function calling
