@@ -74,6 +74,14 @@ export default function APIPageClient({ machineId }) {
   const [rotatedKeyInfo, setRotatedKeyInfo] = useState(null);
   const [confirmState, setConfirmState] = useState(null);
 
+  // Edit-key modal state (metadata only — the key value is changed via Rotate)
+  const [editKey, setEditKey] = useState(null);
+  const [editKeyName, setEditKeyName] = useState("");
+  const [editKeyManagerName, setEditKeyManagerName] = useState("");
+  const [editKeyManagerEmail, setEditKeyManagerEmail] = useState("");
+  const [editKeyExpiresAt, setEditKeyExpiresAt] = useState("");
+  const [editKeyError, setEditKeyError] = useState("");
+
   const [requireApiKey, setRequireApiKey] = useState(false);
   const [requireLogin, setRequireLogin] = useState(true);
   const [hasPassword, setHasPassword] = useState(true);
@@ -841,6 +849,64 @@ export default function APIPageClient({ machineId }) {
     setCreateKeyError("");
   };
 
+  // Convert a stored ISO timestamp to a value the datetime-local input accepts
+  // (local time, no timezone suffix: "YYYY-MM-DDTHH:mm").
+  const isoToLocalInput = (isoString) => {
+    if (!isoString) return "";
+    const date = new Date(isoString);
+    if (Number.isNaN(date.getTime())) return "";
+    const offsetMs = date.getTimezoneOffset() * 60000;
+    return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+  };
+
+  const resetEditKeyForm = () => {
+    setEditKey(null);
+    setEditKeyName("");
+    setEditKeyManagerName("");
+    setEditKeyManagerEmail("");
+    setEditKeyExpiresAt("");
+    setEditKeyError("");
+  };
+
+  const handleOpenEditKey = (key) => {
+    setEditKey(key);
+    setEditKeyName(key.name || "");
+    setEditKeyManagerName(key.managerName || "");
+    setEditKeyManagerEmail(key.managerEmail || "");
+    setEditKeyExpiresAt(isoToLocalInput(key.expiresAt));
+    setEditKeyError("");
+  };
+
+  const handleUpdateKey = async () => {
+    if (!editKey || !editKeyName.trim()) return;
+    setEditKeyError("");
+
+    try {
+      const res = await fetch(`/api/keys/${editKey.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: editKeyName.trim(),
+          managerName: editKeyManagerName.trim(),
+          managerEmail: editKeyManagerEmail.trim(),
+          // datetime-local has no timezone; convert to ISO for storage. Empty clears it.
+          expiresAt: editKeyExpiresAt ? new Date(editKeyExpiresAt).toISOString() : null,
+        }),
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        await fetchData();
+        resetEditKeyForm();
+      } else {
+        setEditKeyError(data.error || "Failed to update key");
+      }
+    } catch (error) {
+      console.log("Error updating key:", error);
+      setEditKeyError("Failed to update key");
+    }
+  };
+
   const handleCreateKey = async () => {
     if (!newKeyName.trim()) return;
     setCreateKeyError("");
@@ -1413,6 +1479,13 @@ export default function APIPageClient({ machineId }) {
                     title={key.isActive ? "Pause key" : "Resume key"}
                   />
                   <button
+                    onClick={() => handleOpenEditKey(key)}
+                    className="p-2 hover:bg-primary/10 rounded text-text-muted hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
+                    title="Edit key"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">edit</span>
+                  </button>
+                  <button
                     onClick={() => handleRotateKey(key)}
                     className="p-2 hover:bg-primary/10 rounded text-text-muted hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
                     title="Rotate key"
@@ -1627,6 +1700,56 @@ export default function APIPageClient({ machineId }) {
               variant="ghost"
               fullWidth
             >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Edit Key Modal — metadata only; the key value is changed via Rotate */}
+      <Modal
+        isOpen={!!editKey}
+        title="Edit API Key"
+        onClose={resetEditKeyForm}
+      >
+        <div className="flex flex-col gap-4">
+          <Input
+            label="Key Name"
+            value={editKeyName}
+            onChange={(e) => setEditKeyName(e.target.value)}
+            placeholder="Production Key"
+          />
+          <Input
+            label="Manager Name (optional)"
+            value={editKeyManagerName}
+            onChange={(e) => setEditKeyManagerName(e.target.value)}
+            placeholder="Jane Doe"
+          />
+          <Input
+            label="Manager Email (optional)"
+            type="email"
+            value={editKeyManagerEmail}
+            onChange={(e) => setEditKeyManagerEmail(e.target.value)}
+            placeholder="jane@example.com"
+          />
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium text-text-main">Expiration (optional)</label>
+            <input
+              type="datetime-local"
+              value={editKeyExpiresAt}
+              onChange={(e) => setEditKeyExpiresAt(e.target.value)}
+              className="h-10 px-3 rounded-lg border border-black/10 dark:border-white/10 bg-surface text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+            <p className="text-xs text-text-muted">Requests with this key are rejected after expiry. Leave empty for no expiry.</p>
+          </div>
+          {editKeyError && (
+            <p className="text-sm text-red-500">{editKeyError}</p>
+          )}
+          <div className="flex gap-2">
+            <Button onClick={handleUpdateKey} fullWidth disabled={!editKeyName.trim()}>
+              Save
+            </Button>
+            <Button onClick={resetEditKeyForm} variant="ghost" fullWidth>
               Cancel
             </Button>
           </div>
