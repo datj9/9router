@@ -60,6 +60,9 @@ export function buildRequestDetail(base, overrides = {}) {
     provider: base.provider || "unknown",
     model: base.model || "unknown",
     connectionId: base.connectionId || undefined,
+    apiKey: base.apiKey || undefined,
+    endpoint: base.endpoint || undefined,
+    project: base.project || null,
     timestamp: new Date().toISOString(),
     latency: base.latency || { ttft: 0, total: 0 },
     tokens: base.tokens || { prompt_tokens: 0, completion_tokens: 0 },
@@ -72,7 +75,7 @@ export function buildRequestDetail(base, overrides = {}) {
   };
 }
 
-export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, endpoint, label = "USAGE" }) {
+export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, endpoint, project, label = "USAGE" }) {
   if (!tokens || typeof tokens !== "object") return;
 
   const inTokens = tokens.input_tokens ?? tokens.prompt_tokens ?? 0;
@@ -84,10 +87,14 @@ export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, 
   const accountSuffix = connectionId ? ` | account=${connectionId.slice(0, 8)}...` : "";
   console.log(`${COLORS.green}[${time}] 📊 [${label}] ${provider.toUpperCase()} | in=${inTokens} | out=${outTokens}${accountSuffix}${COLORS.reset}`);
 
-  // Normalize to OpenAI token shape for storage
+  // Normalize to OpenAI token shape for storage, preserving cache/reasoning
+  // detail so usageHistory keeps the same fidelity the streaming logger had.
   const normalized = {
     prompt_tokens: tokens.prompt_tokens ?? tokens.input_tokens ?? 0,
-    completion_tokens: tokens.completion_tokens ?? tokens.output_tokens ?? 0
+    completion_tokens: tokens.completion_tokens ?? tokens.output_tokens ?? 0,
+    cache_read_input_tokens: tokens.cache_read_input_tokens ?? tokens.cached_tokens ?? 0,
+    cache_creation_input_tokens: tokens.cache_creation_input_tokens ?? 0,
+    reasoning_tokens: tokens.reasoning_tokens ?? 0
   };
 
   saveRequestUsage({
@@ -97,6 +104,7 @@ export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, 
     timestamp: new Date().toISOString(),
     connectionId: connectionId || undefined,
     apiKey: apiKey || undefined,
-    endpoint: endpoint || null
+    endpoint: endpoint || null,
+    project: project || null
   }).catch(() => {});
 }

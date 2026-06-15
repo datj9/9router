@@ -427,17 +427,28 @@ export class CodexExecutor extends BaseExecutor {
     }
 
     // Priority: explicit reasoning.effort > reasoning_effort param > model suffix > default (medium)
-    if (!body.reasoning) {
-      const effort = body.reasoning_effort || modelEffort || 'low';
-      body.reasoning = { effort, summary: "auto" };
-    } else if (!body.reasoning.summary) {
-      body.reasoning.summary = "auto";
+    if (!body.reasoning || typeof body.reasoning !== 'object' || Array.isArray(body.reasoning)) {
+      const effort = body.reasoning_effort || modelEffort || 'medium';
+      body.reasoning = { effort, summary: 'auto' };
+    } else {
+      if (!body.reasoning.effort) {
+        body.reasoning.effort = body.reasoning_effort || modelEffort || 'medium';
+      }
+      if (!body.reasoning.summary) {
+        body.reasoning.summary = 'auto';
+      }
     }
     delete body.reasoning_effort;
 
     // Include reasoning encrypted content (required by Codex backend for reasoning models)
+    const include = Array.isArray(body.include) ? body.include : [];
     if (body.reasoning && body.reasoning.effort && body.reasoning.effort !== 'none') {
-      body.include = ["reasoning.encrypted_content"];
+      body.include = include.includes("reasoning.encrypted_content")
+        ? include
+        : [...include, "reasoning.encrypted_content"];
+    } else if (include.length > 0) {
+      body.include = include.filter(item => item !== "reasoning.encrypted_content");
+      if (body.include.length === 0) delete body.include;
     }
 
     // Remove unsupported parameters for Codex API

@@ -8,6 +8,22 @@ import * as log from "../utils/logger.js";
 // Mutex to prevent race conditions during account selection
 let selectionMutex = Promise.resolve();
 
+export function isRateLimitError(status, errorText, resetsAtMs = null) {
+  if (status === 429) return true;
+  if (resetsAtMs && resetsAtMs > Date.now()) return true;
+  const text = typeof errorText === "string" ? errorText.toLowerCase() : "";
+  return (
+    text.includes("rate limit") ||
+    text.includes("rate_limited") ||
+    text.includes("rate-limit") ||
+    text.includes("too many requests") ||
+    text.includes("quota exceeded") ||
+    text.includes("usage_limit") ||
+    text.includes("usage limit") ||
+    text.includes("insufficient quota")
+  );
+}
+
 /**
  * Get provider credentials from localDb
  * Filters out unavailable accounts and returns the selected account based on strategy
@@ -205,6 +221,7 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
   const connections = await getProviderConnections({ provider });
   const conn = connections.find(c => c.id === connectionId);
   const backoffLevel = conn?.backoffLevel || 0;
+  const rateLimited = isRateLimitError(status, errorText, resetsAtMs);
 
   // Provider-specific precise cooldown (e.g. codex usage_limit_reached resets_at) overrides backoff
   let shouldFallback, cooldownMs, newBackoffLevel;
@@ -222,6 +239,7 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
 
   await updateProviderConnection(connectionId, {
     ...lockUpdate,
+    ...(rateLimited ? { isActive: false } : {}),
     testStatus: "unavailable",
     lastError: reason,
     errorCode: status,
@@ -232,6 +250,9 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
   const lockKey = Object.keys(lockUpdate)[0];
   const connName = conn?.displayName || conn?.name || conn?.email || connectionId.slice(0, 8);
   log.warn("AUTH", `${connName} locked ${lockKey} for ${Math.round(cooldownMs / 1000)}s [${status}]`);
+  if (rateLimited) {
+    log.warn("AUTH", `${connName} disabled after rate limit [${status}]`);
+  }
 
   if (provider && status && reason) {
     console.error(`❌ ${provider} [${status}]: ${reason}`);
@@ -301,6 +322,28 @@ export function extractApiKey(request) {
   }
 
   return null;
+}
+
+// Max stored length for a project tag — bounds DB/log growth and blocks abuse
+// via an oversized header value, keeping audit fields (A.12.4) sane.
+const MAX_PROJECT_TAG_LENGTH = 100;
+
+/**
+ * Extract the caller-supplied project tag used to group usage stats.
+ * Read from the `x-project` header (preferred) or `x-project-id` alias.
+ * Returns null when absent so usage rolls up under "Untagged".
+ *
+ * Distinct from the Google Cloud project id handled by
+ * getProjectIdForConnection — this is a free-form usage-grouping label.
+ * @param {Request} request - Incoming web Request exposing a headers map
+ * @returns {string|null} Trimmed, length-capped project tag, or null
+ */
+export function extractProjectTag(request) {
+  const rawProjectTag = request.headers.get("x-project") || request.headers.get("x-project-id");
+  if (!rawProjectTag) return null;
+
+  const projectTag = rawProjectTag.trim().slice(0, MAX_PROJECT_TAG_LENGTH);
+  return projectTag.length > 0 ? projectTag : null;
 }
 
 /**
