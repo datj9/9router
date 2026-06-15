@@ -117,7 +117,7 @@ export default function RequestDetailsTab() {
   const [filters, setFilters] = useState({
     provider: "",
     project: "",
-    apiKey: "",
+    apiKeyId: "",
     startDate: "",
     endDate: ""
   });
@@ -174,13 +174,15 @@ export default function RequestDetailsTab() {
   const fetchApiKeys = useCallback(async (signal) => {
     try {
       const res = await fetch("/api/keys", { signal });
-      const data = await res.json();
+      const keysResponse = await res.json();
       if (signal?.aborted) return;
 
-      const keyOptions = (data.keys || [])
-        .filter((key) => key.key)
+      // Option value is the key id, not the secret value — the id is what gets
+      // sent as a query param, keeping the raw key out of request URLs / logs.
+      const keyOptions = (keysResponse.keys || [])
+        .filter((key) => key.id)
         .map((key) => ({
-          value: key.key,
+          value: key.id,
           label: key.name || formatApiKeyPrefix(key.key)
         }));
 
@@ -201,16 +203,16 @@ export default function RequestDetailsTab() {
       });
       if (filters.provider) params.append("provider", filters.provider);
       if (filters.project) params.append("project", filters.project);
-      if (filters.apiKey) params.append("apiKey", filters.apiKey);
+      if (filters.apiKeyId) params.append("apiKeyId", filters.apiKeyId);
       if (filters.startDate) params.append("startDate", filters.startDate);
       if (filters.endDate) params.append("endDate", filters.endDate);
 
       const res = await fetch(`/api/usage/request-details?${params}`, { signal });
-      const data = await res.json();
+      const detailsResponse = await res.json();
       if (signal?.aborted) return;
 
-      setDetails(data.details || []);
-      setPagination(prev => ({ ...prev, ...data.pagination }));
+      setDetails(detailsResponse.details || []);
+      setPagination(prev => ({ ...prev, ...detailsResponse.pagination }));
     } catch (error) {
       if (error.name !== "AbortError") {
         console.error("Failed to fetch request details:", error);
@@ -250,7 +252,7 @@ export default function RequestDetailsTab() {
   };
 
   const handleClearFilters = () => {
-    setFilters({ provider: "", project: "", apiKey: "", startDate: "", endDate: "" });
+    setFilters({ provider: "", project: "", apiKeyId: "", startDate: "", endDate: "" });
   };
 
   return (
@@ -305,8 +307,8 @@ export default function RequestDetailsTab() {
             <label htmlFor="apikey-filter" className="text-sm font-medium text-text-main">API Key</label>
             <select
               id="apikey-filter"
-              value={filters.apiKey}
-              onChange={(e) => setFilters({ ...filters, apiKey: e.target.value })}
+              value={filters.apiKeyId}
+              onChange={(e) => setFilters({ ...filters, apiKeyId: e.target.value })}
               className={cn(
                 "h-9 px-3 rounded-lg border border-black/10 dark:border-white/10 bg-surface",
                 "text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/20",
@@ -356,7 +358,7 @@ export default function RequestDetailsTab() {
             <Button 
               variant="ghost" 
               onClick={handleClearFilters}
-              disabled={!filters.provider && !filters.project && !filters.apiKey && !filters.startDate && !filters.endDate}
+              disabled={!filters.provider && !filters.project && !filters.apiKeyId && !filters.startDate && !filters.endDate}
               className="w-full"
             >
               Clear Filters
@@ -408,7 +410,9 @@ export default function RequestDetailsTab() {
                     </td>
                     <td
                       className="max-w-[180px] truncate p-4 text-sm text-text-main"
-                      title={formatApiKeyPrefix(detail.apiKey)}
+                      title={detail.keyName && detail.apiKey
+                        ? `${detail.keyName} (${formatApiKeyPrefix(detail.apiKey)})`
+                        : formatApiKeyPrefix(detail.apiKey)}
                     >
                       {detail.keyName || formatApiKeyPrefix(detail.apiKey)}
                     </td>

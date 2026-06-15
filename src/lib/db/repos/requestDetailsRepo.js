@@ -179,32 +179,31 @@ export async function getRequestDetails(filter = {}) {
     [...params, pageSize, offset]
   );
   const details = rows.map((r) => parseJson(r.data, {}));
-  await attachKeyNames(details);
+  const enrichedDetails = await withKeyNames(details);
 
   return {
-    details,
+    details: enrichedDetails,
     pagination: { page, pageSize, totalItems, totalPages, hasNext: page < totalPages, hasPrev: page > 1 },
   };
 }
 
-// Resolve a human-readable name for each detail's apiKey, matching the rule used
-// by usageRepo so naming stays consistent across the usage charts and the details
-// tab: the key's configured name, else its masked prefix, else a local sentinel.
-// Mutates each detail with a `keyName` field. Failures degrade to the masked
-// prefix rather than breaking the listing.
-async function attachKeyNames(details) {
+// Return a new array of details, each carrying a human-readable `keyName`,
+// matching the rule usageRepo uses so naming stays consistent across the usage
+// charts and the details tab: the key's configured name, else its masked prefix,
+// else a local sentinel. Failures degrade to the masked prefix rather than
+// breaking the listing.
+async function withKeyNames(details) {
   let apiKeyMap = {};
   try {
     const { getApiKeys } = await import("./apiKeysRepo.js");
     const apiKeys = await getApiKeys();
     for (const apiKey of apiKeys) apiKeyMap[apiKey.key] = apiKey.name;
-  } catch {
+  } catch (error) {
+    console.error("[requestDetailsRepo] Failed to load API keys for keyName enrichment:", error);
     apiKeyMap = {};
   }
 
-  for (const detail of details) {
-    detail.keyName = resolveKeyName(detail.apiKey, apiKeyMap);
-  }
+  return details.map((detail) => ({ ...detail, keyName: resolveKeyName(detail.apiKey, apiKeyMap) }));
 }
 
 function resolveKeyName(apiKey, apiKeyMap) {

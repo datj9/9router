@@ -893,16 +893,16 @@ export default function APIPageClient({ machineId }) {
           expiresAt: editKeyExpiresAt ? new Date(editKeyExpiresAt).toISOString() : null,
         }),
       });
-      const data = await res.json();
+      const responseBody = await res.json();
 
       if (res.ok) {
         await fetchData();
         resetEditKeyForm();
       } else {
-        setEditKeyError(data.error || "Failed to update key");
+        setEditKeyError(responseBody.error || "Failed to update key");
       }
     } catch (error) {
-      console.log("Error updating key:", error);
+      console.error("Error updating key:", error);
       setEditKeyError("Failed to update key");
     }
   };
