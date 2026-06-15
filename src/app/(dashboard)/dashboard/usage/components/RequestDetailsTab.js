@@ -112,10 +112,12 @@ export default function RequestDetailsTab() {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [providers, setProviders] = useState([]);
   const [projects, setProjects] = useState([]);
+  const [apiKeys, setApiKeys] = useState([]);
   const [providerNameCache, setProviderNameCache] = useState(null);
   const [filters, setFilters] = useState({
     provider: "",
     project: "",
+    apiKey: "",
     startDate: "",
     endDate: ""
   });
@@ -169,6 +171,27 @@ export default function RequestDetailsTab() {
     }
   }, []);
 
+  const fetchApiKeys = useCallback(async (signal) => {
+    try {
+      const res = await fetch("/api/keys", { signal });
+      const data = await res.json();
+      if (signal?.aborted) return;
+
+      const keyOptions = (data.keys || [])
+        .filter((key) => key.key)
+        .map((key) => ({
+          value: key.key,
+          label: key.name || formatApiKeyPrefix(key.key)
+        }));
+
+      setApiKeys(keyOptions);
+    } catch (error) {
+      if (error.name !== "AbortError") {
+        console.error("Failed to fetch API keys:", error);
+      }
+    }
+  }, []);
+
   const fetchDetails = useCallback(async (signal) => {
     setLoading(true);
     try {
@@ -178,6 +201,7 @@ export default function RequestDetailsTab() {
       });
       if (filters.provider) params.append("provider", filters.provider);
       if (filters.project) params.append("project", filters.project);
+      if (filters.apiKey) params.append("apiKey", filters.apiKey);
       if (filters.startDate) params.append("startDate", filters.startDate);
       if (filters.endDate) params.append("endDate", filters.endDate);
 
@@ -202,8 +226,9 @@ export default function RequestDetailsTab() {
     const controller = new AbortController();
     fetchProviders(controller.signal);
     fetchProjects(controller.signal);
+    fetchApiKeys(controller.signal);
     return () => controller.abort();
-  }, [fetchProviders, fetchProjects]);
+  }, [fetchProviders, fetchProjects, fetchApiKeys]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -225,13 +250,13 @@ export default function RequestDetailsTab() {
   };
 
   const handleClearFilters = () => {
-    setFilters({ provider: "", project: "", startDate: "", endDate: "" });
+    setFilters({ provider: "", project: "", apiKey: "", startDate: "", endDate: "" });
   };
 
   return (
     <div className="flex min-w-0 flex-col gap-6">
       <Card padding="md">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-6">
           <div className="flex min-w-0 flex-col gap-2">
             <label htmlFor="provider-filter" className="text-sm font-medium text-text-main">Provider</label>
             <select
@@ -277,6 +302,28 @@ export default function RequestDetailsTab() {
           </div>
 
           <div className="flex min-w-0 flex-col gap-2">
+            <label htmlFor="apikey-filter" className="text-sm font-medium text-text-main">API Key</label>
+            <select
+              id="apikey-filter"
+              value={filters.apiKey}
+              onChange={(e) => setFilters({ ...filters, apiKey: e.target.value })}
+              className={cn(
+                "h-9 px-3 rounded-lg border border-black/10 dark:border-white/10 bg-surface",
+                "text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/20",
+                "w-full min-w-0 cursor-pointer"
+              )}
+              style={{ colorScheme: 'auto' }}
+            >
+              <option value="">All API Keys</option>
+              {apiKeys.map((apiKey) => (
+                <option key={apiKey.value} value={apiKey.value}>
+                  {apiKey.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex min-w-0 flex-col gap-2">
             <label htmlFor="start-date-filter" className="text-sm font-medium text-text-main">Start Date</label>
             <input
               id="start-date-filter"
@@ -309,7 +356,7 @@ export default function RequestDetailsTab() {
             <Button 
               variant="ghost" 
               onClick={handleClearFilters}
-              disabled={!filters.provider && !filters.project && !filters.startDate && !filters.endDate}
+              disabled={!filters.provider && !filters.project && !filters.apiKey && !filters.startDate && !filters.endDate}
               className="w-full"
             >
               Clear Filters
@@ -359,8 +406,11 @@ export default function RequestDetailsTab() {
                     <td className="whitespace-nowrap p-4 text-sm text-text-main">
                       {new Date(detail.timestamp).toLocaleString()}
                     </td>
-                    <td className="whitespace-nowrap p-4 font-mono text-sm text-text-main">
-                      {formatApiKeyPrefix(detail.apiKey)}
+                    <td
+                      className="max-w-[180px] truncate p-4 text-sm text-text-main"
+                      title={formatApiKeyPrefix(detail.apiKey)}
+                    >
+                      {detail.keyName || formatApiKeyPrefix(detail.apiKey)}
                     </td>
                     <td className="max-w-[260px] truncate p-4 font-mono text-sm text-text-main">
                       {detail.model}
@@ -460,7 +510,10 @@ export default function RequestDetailsTab() {
               </div>
               <div>
                 <span className="text-text-muted">API Key:</span>{" "}
-                <span className="font-mono text-text-main">{formatApiKeyPrefix(selectedDetail.apiKey)}</span>
+                <span className="text-text-main">{selectedDetail.keyName || formatApiKeyPrefix(selectedDetail.apiKey)}</span>
+                {selectedDetail.keyName && selectedDetail.apiKey ? (
+                  <span className="ms-1 font-mono text-xs text-text-muted">({formatApiKeyPrefix(selectedDetail.apiKey)})</span>
+                ) : null}
               </div>
               <div>
                 <span className="text-text-muted">Input Tokens:</span>{" "}
