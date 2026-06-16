@@ -15,6 +15,7 @@ import {
 } from "@/lib/tunnel";
 import { getMitmStatus, startMitm, loadEncryptedPassword, initDbHooks, restoreToolDNS, removeAllDNSEntriesSync } from "@/mitm/manager";
 import { syncToJson as syncMitmAliasCache } from "@/lib/mitmAliasCache";
+import { startQuotaAutoToggleScheduler } from "@/shared/services/quotaAutoToggle";
 
 // Inject correct paths and DB hooks into manager.js (CJS) from ESM context
 (function bootstrapMitm() {
@@ -36,6 +37,7 @@ const g = global.__appSingleton ??= {
   signalHandlersRegistered: false,
   watchdogInterval: null,
   networkMonitorInterval: null,
+  quotaAutoToggleInterval: null,
   lastNetworkFingerprint: null,
   lastWatchdogTick: Date.now(),
   lastOnline: null,
@@ -88,6 +90,7 @@ export async function initializeApp() {
     startWatchdog();
     startNetworkMonitor();
     autoStartMitm();
+    startQuotaAutoToggleScheduler();
   } catch (error) {
     console.error("[InitApp] Error:", error);
   }

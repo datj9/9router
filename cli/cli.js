@@ -60,7 +60,10 @@ const APP_NAME = pkg.name; // Use from package.json
 const INSTALL_CMD_LATEST = `npm i -g ${APP_NAME}@latest --prefer-online`;
 
 const DEFAULT_PORT = 20128;
-const DEFAULT_HOST = "0.0.0.0";
+// Bind to loopback by default so local no-auth conveniences are not reachable
+// from the network. Network exposure is explicit opt-in via --host 0.0.0.0,
+// which then correctly requires API-key / login auth (see dashboardGuard.js).
+const DEFAULT_HOST = "127.0.0.1";
 const MAX_PORT_ATTEMPTS = 10;
 // Identifiers for killAllAppProcesses - only kill 9router specifically
 const PROCESS_IDENTIFIERS = [

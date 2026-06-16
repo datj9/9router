@@ -66,8 +66,21 @@ export default function APIPageClient({ machineId }) {
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newKeyName, setNewKeyName] = useState("");
+  const [newKeyManagerName, setNewKeyManagerName] = useState("");
+  const [newKeyManagerEmail, setNewKeyManagerEmail] = useState("");
+  const [newKeyExpiresAt, setNewKeyExpiresAt] = useState("");
+  const [createKeyError, setCreateKeyError] = useState("");
   const [createdKey, setCreatedKey] = useState(null);
+  const [rotatedKeyInfo, setRotatedKeyInfo] = useState(null);
   const [confirmState, setConfirmState] = useState(null);
+
+  // Edit-key modal state (metadata only — the key value is changed via Rotate)
+  const [editKey, setEditKey] = useState(null);
+  const [editKeyName, setEditKeyName] = useState("");
+  const [editKeyManagerName, setEditKeyManagerName] = useState("");
+  const [editKeyManagerEmail, setEditKeyManagerEmail] = useState("");
+  const [editKeyExpiresAt, setEditKeyExpiresAt] = useState("");
+  const [editKeyError, setEditKeyError] = useState("");
 
   const [requireApiKey, setRequireApiKey] = useState(false);
   const [requireLogin, setRequireLogin] = useState(true);
@@ -77,6 +90,26 @@ export default function APIPageClient({ machineId }) {
   const [cavemanEnabled, setCavemanEnabled] = useState(false);
   const [cavemanLevel, setCavemanLevel] = useState("full");
   const [locale, setLocale] = useState("en");
+
+  // Email notification settings
+  const [emailSettings, setEmailSettings] = useState({
+    emailEnabled: false,
+    emailProvider: "resend",
+    emailFromAddress: "",
+    emailFromName: "9Router",
+    resendApiKey: "",
+    resendApiKeyConfigured: false,
+    smtpHost: "",
+    smtpPort: 587,
+    smtpSecure: false,
+    smtpUser: "",
+    smtpPassword: "",
+    smtpPasswordConfigured: false,
+  });
+  const [emailSaving, setEmailSaving] = useState(false);
+  const [emailStatus, setEmailStatus] = useState(null);
+  const [emailTestTo, setEmailTestTo] = useState("");
+  const [emailTesting, setEmailTesting] = useState(false);
 
   // Cloudflare Tunnel state
   const [tunnelChecking, setTunnelChecking] = useState(true);
@@ -275,6 +308,21 @@ export default function APIPageClient({ machineId }) {
         setRtkEnabledState(data.rtkEnabled !== false);
         setCavemanEnabled(!!data.cavemanEnabled);
         setCavemanLevel(data.cavemanLevel || "full");
+        setEmailSettings((prev) => ({
+          ...prev,
+          emailEnabled: !!data.emailEnabled,
+          emailProvider: data.emailProvider || "resend",
+          emailFromAddress: data.emailFromAddress || "",
+          emailFromName: data.emailFromName || "9Router",
+          resendApiKey: "",
+          resendApiKeyConfigured: !!data.resendApiKeyConfigured,
+          smtpHost: data.smtpHost || "",
+          smtpPort: data.smtpPort || 587,
+          smtpSecure: !!data.smtpSecure,
+          smtpUser: data.smtpUser || "",
+          smtpPassword: "",
+          smtpPasswordConfigured: !!data.smtpPasswordConfigured,
+        }));
       }
       if (statusRes.ok) {
         const data = await statusRes.json();
@@ -321,6 +369,86 @@ export default function APIPageClient({ machineId }) {
       if (res.ok) setRequireApiKey(value);
     } catch (error) {
       console.log("Error updating requireApiKey:", error);
+    }
+  };
+
+  const handleSaveEmailSettings = async () => {
+    setEmailSaving(true);
+    setEmailStatus(null);
+    try {
+      const payload = {
+        emailEnabled: emailSettings.emailEnabled,
+        emailProvider: emailSettings.emailProvider,
+        emailFromAddress: emailSettings.emailFromAddress.trim(),
+        emailFromName: emailSettings.emailFromName.trim(),
+        smtpHost: emailSettings.smtpHost.trim(),
+        smtpPort: Number(emailSettings.smtpPort) || 587,
+        smtpSecure: emailSettings.smtpSecure,
+        smtpUser: emailSettings.smtpUser.trim(),
+      };
+      // Only send secrets when the user actually entered a new value, so a
+      // blank field keeps the stored secret instead of clearing it.
+      if (emailSettings.resendApiKey.trim()) payload.resendApiKey = emailSettings.resendApiKey.trim();
+      if (emailSettings.smtpPassword.trim()) payload.smtpPassword = emailSettings.smtpPassword.trim();
+
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        setEmailStatus({ ok: true, message: "Email settings saved." });
+        setEmailSettings((prev) => ({
+          ...prev,
+          resendApiKey: "",
+          smtpPassword: "",
+          resendApiKeyConfigured: prev.resendApiKeyConfigured || !!payload.resendApiKey,
+          smtpPasswordConfigured: prev.smtpPasswordConfigured || !!payload.smtpPassword,
+        }));
+      } else {
+        const data = await res.json();
+        setEmailStatus({ ok: false, message: data.error || "Failed to save email settings." });
+      }
+    } catch (error) {
+      console.log("Error saving email settings:", error);
+      setEmailStatus({ ok: false, message: "Failed to save email settings." });
+    } finally {
+      setEmailSaving(false);
+    }
+  };
+
+  const handleTestEmail = async () => {
+    if (!emailTestTo.trim()) return;
+    setEmailTesting(true);
+    setEmailStatus(null);
+    try {
+      const res = await fetch("/api/settings/email-test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: emailTestTo.trim(),
+          emailProvider: emailSettings.emailProvider,
+          emailFromAddress: emailSettings.emailFromAddress.trim(),
+          emailFromName: emailSettings.emailFromName.trim(),
+          resendApiKey: emailSettings.resendApiKey.trim() || undefined,
+          smtpHost: emailSettings.smtpHost.trim(),
+          smtpPort: Number(emailSettings.smtpPort) || 587,
+          smtpSecure: emailSettings.smtpSecure,
+          smtpUser: emailSettings.smtpUser.trim(),
+          smtpPassword: emailSettings.smtpPassword.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setEmailStatus({ ok: true, message: `Test email sent to ${emailTestTo.trim()}.` });
+      } else {
+        setEmailStatus({ ok: false, message: data.error || "Failed to send test email." });
+      }
+    } catch (error) {
+      console.log("Error sending test email:", error);
+      setEmailStatus({ ok: false, message: "Failed to send test email." });
+    } finally {
+      setEmailTesting(false);
     }
   };
 
@@ -713,26 +841,128 @@ export default function APIPageClient({ machineId }) {
     }
   };
 
+  const resetCreateKeyForm = () => {
+    setNewKeyName("");
+    setNewKeyManagerName("");
+    setNewKeyManagerEmail("");
+    setNewKeyExpiresAt("");
+    setCreateKeyError("");
+  };
+
+  // Convert a stored ISO timestamp to a value the datetime-local input accepts
+  // (local time, no timezone suffix: "YYYY-MM-DDTHH:mm").
+  const isoToLocalInput = (isoString) => {
+    if (!isoString) return "";
+    const date = new Date(isoString);
+    if (Number.isNaN(date.getTime())) return "";
+    const offsetMs = date.getTimezoneOffset() * 60000;
+    return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+  };
+
+  const resetEditKeyForm = () => {
+    setEditKey(null);
+    setEditKeyName("");
+    setEditKeyManagerName("");
+    setEditKeyManagerEmail("");
+    setEditKeyExpiresAt("");
+    setEditKeyError("");
+  };
+
+  const handleOpenEditKey = (key) => {
+    setEditKey(key);
+    setEditKeyName(key.name || "");
+    setEditKeyManagerName(key.managerName || "");
+    setEditKeyManagerEmail(key.managerEmail || "");
+    setEditKeyExpiresAt(isoToLocalInput(key.expiresAt));
+    setEditKeyError("");
+  };
+
+  const handleUpdateKey = async () => {
+    if (!editKey || !editKeyName.trim()) return;
+    setEditKeyError("");
+
+    try {
+      const res = await fetch(`/api/keys/${editKey.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: editKeyName.trim(),
+          managerName: editKeyManagerName.trim(),
+          managerEmail: editKeyManagerEmail.trim(),
+          // datetime-local has no timezone; convert to ISO for storage. Empty clears it.
+          expiresAt: editKeyExpiresAt ? new Date(editKeyExpiresAt).toISOString() : null,
+        }),
+      });
+      const responseBody = await res.json();
+
+      if (res.ok) {
+        await fetchData();
+        resetEditKeyForm();
+      } else {
+        setEditKeyError(responseBody.error || "Failed to update key");
+      }
+    } catch (error) {
+      console.error("Error updating key:", error);
+      setEditKeyError("Failed to update key");
+    }
+  };
+
   const handleCreateKey = async () => {
     if (!newKeyName.trim()) return;
+    setCreateKeyError("");
 
     try {
       const res = await fetch("/api/keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newKeyName }),
+        body: JSON.stringify({
+          name: newKeyName,
+          managerName: newKeyManagerName.trim() || undefined,
+          managerEmail: newKeyManagerEmail.trim() || undefined,
+          // datetime-local has no timezone; convert to ISO for storage
+          expiresAt: newKeyExpiresAt ? new Date(newKeyExpiresAt).toISOString() : undefined,
+        }),
       });
       const data = await res.json();
 
       if (res.ok) {
         setCreatedKey(data.key);
         await fetchData();
-        setNewKeyName("");
+        resetCreateKeyForm();
         setShowAddModal(false);
+      } else {
+        setCreateKeyError(data.error || "Failed to create key");
       }
     } catch (error) {
       console.log("Error creating key:", error);
+      setCreateKeyError("Failed to create key");
     }
+  };
+
+  const handleRotateKey = (key) => {
+    setConfirmState({
+      title: "Rotate API Key",
+      message: `Rotate "${key.name}"?\n\nA new key value will be generated and the current one will stop working immediately.${key.managerEmail ? `\n\nThe new key will be emailed to ${key.managerEmail}.` : ""}`,
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          const res = await fetch(`/api/keys/${key.id}/rotate`, { method: "POST" });
+          const data = await res.json();
+          if (res.ok) {
+            await fetchData();
+            setRotatedKeyInfo({
+              name: key.name,
+              newKey: data.newKey,
+              notification: data.notification,
+            });
+          } else {
+            console.log("Error rotating key:", data.error);
+          }
+        } catch (error) {
+          console.log("Error rotating key:", error);
+        }
+      },
+    });
   };
 
   const handleDeleteKey = async (id) => {
@@ -1206,9 +1436,24 @@ export default function APIPageClient({ machineId }) {
                       </span>
                     </button>
                   </div>
+                  {(key.managerName || key.managerEmail) && (
+                    <p className="text-xs text-text-muted mt-1">
+                      Managed by {key.managerName || key.managerEmail}
+                      {key.managerName && key.managerEmail ? ` (${key.managerEmail})` : ""}
+                    </p>
+                  )}
                   <p className="text-xs text-text-muted mt-1">
                     Created {new Date(key.createdAt).toLocaleDateString()}
+                    {key.rotatedAt && ` · Rotated ${new Date(key.rotatedAt).toLocaleDateString()}`}
                   </p>
+                  {key.expiresAt && (() => {
+                    const expired = new Date(key.expiresAt).getTime() <= Date.now();
+                    return (
+                      <p className={`text-xs mt-1 ${expired ? "text-red-500" : "text-text-muted"}`}>
+                        {expired ? "Expired" : "Expires"} {new Date(key.expiresAt).toLocaleString()}
+                      </p>
+                    );
+                  })()}
                   {key.isActive === false && (
                     <p className="text-xs text-orange-500 mt-1">Paused</p>
                   )}
@@ -1234,6 +1479,20 @@ export default function APIPageClient({ machineId }) {
                     title={key.isActive ? "Pause key" : "Resume key"}
                   />
                   <button
+                    onClick={() => handleOpenEditKey(key)}
+                    className="p-2 hover:bg-primary/10 rounded text-text-muted hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
+                    title="Edit key"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">edit</span>
+                  </button>
+                  <button
+                    onClick={() => handleRotateKey(key)}
+                    className="p-2 hover:bg-primary/10 rounded text-text-muted hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
+                    title="Rotate key"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">autorenew</span>
+                  </button>
+                  <button
                     onClick={() => handleDeleteKey(key.id)}
                     className="p-2 hover:bg-red-500/10 rounded text-red-500 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
                   >
@@ -1246,13 +1505,154 @@ export default function APIPageClient({ machineId }) {
         )}
       </Card>
 
+      {/* Email Notifications */}
+      <Card>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <span className="material-symbols-outlined text-primary">mail</span>
+            Email Notifications
+          </h2>
+        </div>
+
+        <div className="flex items-center justify-between pb-4 mb-4 border-b border-border">
+          <div>
+            <p className="font-medium">Enable email notifications</p>
+            <p className="text-sm text-text-muted">
+              Notify key managers when their API key is rotated
+            </p>
+          </div>
+          <Toggle
+            checked={emailSettings.emailEnabled}
+            onChange={(checked) => setEmailSettings((prev) => ({ ...prev, emailEnabled: checked }))}
+          />
+        </div>
+
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium text-text-main">Provider</label>
+            <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-bg-subtle p-1 sm:w-64">
+              {["resend", "smtp"].map((provider) => (
+                <button
+                  key={provider}
+                  onClick={() => setEmailSettings((prev) => ({ ...prev, emailProvider: provider }))}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${emailSettings.emailProvider === provider ? "bg-primary text-white shadow-sm" : "text-text-muted hover:text-text hover:bg-bg-hover"}`}
+                >
+                  {provider === "resend" ? "Resend" : "SMTP"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Input
+              label="From Address"
+              type="email"
+              value={emailSettings.emailFromAddress}
+              onChange={(e) => setEmailSettings((prev) => ({ ...prev, emailFromAddress: e.target.value }))}
+              placeholder="noreply@example.com"
+            />
+            <Input
+              label="From Name"
+              value={emailSettings.emailFromName}
+              onChange={(e) => setEmailSettings((prev) => ({ ...prev, emailFromName: e.target.value }))}
+              placeholder="9Router"
+            />
+          </div>
+
+          {emailSettings.emailProvider === "resend" ? (
+            <Input
+              label="Resend API Key"
+              type="password"
+              value={emailSettings.resendApiKey}
+              onChange={(e) => setEmailSettings((prev) => ({ ...prev, resendApiKey: e.target.value }))}
+              placeholder={emailSettings.resendApiKeyConfigured ? "•••••••• (saved — leave blank to keep)" : "re_..."}
+            />
+          ) : (
+            <div className="flex flex-col gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <Input
+                  label="SMTP Host"
+                  value={emailSettings.smtpHost}
+                  onChange={(e) => setEmailSettings((prev) => ({ ...prev, smtpHost: e.target.value }))}
+                  placeholder="smtp.example.com"
+                />
+                <Input
+                  label="SMTP Port"
+                  type="number"
+                  value={emailSettings.smtpPort}
+                  onChange={(e) => setEmailSettings((prev) => ({ ...prev, smtpPort: e.target.value }))}
+                  placeholder="587"
+                />
+              </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <Input
+                  label="SMTP Username"
+                  value={emailSettings.smtpUser}
+                  onChange={(e) => setEmailSettings((prev) => ({ ...prev, smtpUser: e.target.value }))}
+                  placeholder="user@example.com"
+                />
+                <Input
+                  label="SMTP Password"
+                  type="password"
+                  value={emailSettings.smtpPassword}
+                  onChange={(e) => setEmailSettings((prev) => ({ ...prev, smtpPassword: e.target.value }))}
+                  placeholder={emailSettings.smtpPasswordConfigured ? "•••••••• (saved — leave blank to keep)" : "Password"}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium text-sm">Use TLS (secure)</p>
+                  <p className="text-xs text-text-muted">Enable for port 465; leave off for STARTTLS on 587</p>
+                </div>
+                <Toggle
+                  size="sm"
+                  checked={emailSettings.smtpSecure}
+                  onChange={(checked) => setEmailSettings((prev) => ({ ...prev, smtpSecure: checked }))}
+                />
+              </div>
+            </div>
+          )}
+
+          {emailStatus && (
+            <p className={`text-sm ${emailStatus.ok ? "text-green-600" : "text-red-500"}`}>
+              {emailStatus.message}
+            </p>
+          )}
+
+          <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-end sm:justify-between">
+            <div className="flex flex-1 flex-col gap-1.5">
+              <label className="text-sm font-medium text-text-main">Send test email</label>
+              <div className="flex gap-2">
+                <Input
+                  type="email"
+                  value={emailTestTo}
+                  onChange={(e) => setEmailTestTo(e.target.value)}
+                  placeholder="you@example.com"
+                  className="flex-1"
+                />
+                <Button
+                  variant="secondary"
+                  onClick={handleTestEmail}
+                  disabled={emailTesting || !emailTestTo.trim()}
+                >
+                  {emailTesting ? "Sending..." : "Test"}
+                </Button>
+              </div>
+            </div>
+            <Button onClick={handleSaveEmailSettings} disabled={emailSaving}>
+              {emailSaving ? "Saving..." : "Save Email Settings"}
+            </Button>
+          </div>
+        </div>
+      </Card>
+
       {/* Add Key Modal */}
       <Modal
         isOpen={showAddModal}
         title="Create API Key"
         onClose={() => {
           setShowAddModal(false);
-          setNewKeyName("");
+          resetCreateKeyForm();
         }}
       >
         <div className="flex flex-col gap-4">
@@ -1262,6 +1662,32 @@ export default function APIPageClient({ machineId }) {
             onChange={(e) => setNewKeyName(e.target.value)}
             placeholder="Production Key"
           />
+          <Input
+            label="Manager Name (optional)"
+            value={newKeyManagerName}
+            onChange={(e) => setNewKeyManagerName(e.target.value)}
+            placeholder="Jane Doe"
+          />
+          <Input
+            label="Manager Email (optional)"
+            type="email"
+            value={newKeyManagerEmail}
+            onChange={(e) => setNewKeyManagerEmail(e.target.value)}
+            placeholder="jane@example.com"
+          />
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium text-text-main">Expiration (optional)</label>
+            <input
+              type="datetime-local"
+              value={newKeyExpiresAt}
+              onChange={(e) => setNewKeyExpiresAt(e.target.value)}
+              className="h-10 px-3 rounded-lg border border-black/10 dark:border-white/10 bg-surface text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+            <p className="text-xs text-text-muted">Requests with this key are rejected after expiry.</p>
+          </div>
+          {createKeyError && (
+            <p className="text-sm text-red-500">{createKeyError}</p>
+          )}
           <div className="flex gap-2">
             <Button onClick={handleCreateKey} fullWidth disabled={!newKeyName.trim()}>
               Create
@@ -1269,11 +1695,61 @@ export default function APIPageClient({ machineId }) {
             <Button
               onClick={() => {
                 setShowAddModal(false);
-                setNewKeyName("");
+                resetCreateKeyForm();
               }}
               variant="ghost"
               fullWidth
             >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Edit Key Modal — metadata only; the key value is changed via Rotate */}
+      <Modal
+        isOpen={!!editKey}
+        title="Edit API Key"
+        onClose={resetEditKeyForm}
+      >
+        <div className="flex flex-col gap-4">
+          <Input
+            label="Key Name"
+            value={editKeyName}
+            onChange={(e) => setEditKeyName(e.target.value)}
+            placeholder="Production Key"
+          />
+          <Input
+            label="Manager Name (optional)"
+            value={editKeyManagerName}
+            onChange={(e) => setEditKeyManagerName(e.target.value)}
+            placeholder="Jane Doe"
+          />
+          <Input
+            label="Manager Email (optional)"
+            type="email"
+            value={editKeyManagerEmail}
+            onChange={(e) => setEditKeyManagerEmail(e.target.value)}
+            placeholder="jane@example.com"
+          />
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium text-text-main">Expiration (optional)</label>
+            <input
+              type="datetime-local"
+              value={editKeyExpiresAt}
+              onChange={(e) => setEditKeyExpiresAt(e.target.value)}
+              className="h-10 px-3 rounded-lg border border-black/10 dark:border-white/10 bg-surface text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+            <p className="text-xs text-text-muted">Requests with this key are rejected after expiry. Leave empty for no expiry.</p>
+          </div>
+          {editKeyError && (
+            <p className="text-sm text-red-500">{editKeyError}</p>
+          )}
+          <div className="flex gap-2">
+            <Button onClick={handleUpdateKey} fullWidth disabled={!editKeyName.trim()}>
+              Save
+            </Button>
+            <Button onClick={resetEditKeyForm} variant="ghost" fullWidth>
               Cancel
             </Button>
           </div>
@@ -1310,6 +1786,48 @@ export default function APIPageClient({ machineId }) {
             </Button>
           </div>
           <Button onClick={() => setCreatedKey(null)} fullWidth>
+            Done
+          </Button>
+        </div>
+      </Modal>
+
+      {/* Rotated Key Modal */}
+      <Modal
+        isOpen={!!rotatedKeyInfo}
+        title="API Key Rotated"
+        onClose={() => setRotatedKeyInfo(null)}
+      >
+        <div className="flex flex-col gap-4">
+          <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
+            <p className="text-sm text-yellow-800 dark:text-yellow-200 mb-2 font-medium">
+              New key for &quot;{rotatedKeyInfo?.name}&quot;
+            </p>
+            <p className="text-sm text-yellow-700 dark:text-yellow-300">
+              The previous key has stopped working. Save this new key now — it is shown only once.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Input
+              value={rotatedKeyInfo?.newKey || ""}
+              readOnly
+              className="flex-1 font-mono text-sm"
+            />
+            <Button
+              variant="secondary"
+              icon={copied === "rotated_key" ? "check" : "content_copy"}
+              onClick={() => copy(rotatedKeyInfo?.newKey, "rotated_key")}
+            >
+              {copied === "rotated_key" ? "Copied!" : "Copy"}
+            </Button>
+          </div>
+          {rotatedKeyInfo?.notification?.attempted && (
+            <p className={`text-sm ${rotatedKeyInfo.notification.ok ? "text-green-600" : "text-red-500"}`}>
+              {rotatedKeyInfo.notification.ok
+                ? "Notification email sent to the key manager."
+                : `Email notification failed: ${rotatedKeyInfo.notification.error || "unknown error"}`}
+            </p>
+          )}
+          <Button onClick={() => setRotatedKeyInfo(null)} fullWidth>
             Done
           </Button>
         </div>

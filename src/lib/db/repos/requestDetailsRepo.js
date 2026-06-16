@@ -90,6 +90,9 @@ async function flushToDatabase() {
             provider: item.provider || null,
             model: item.model || null,
             connectionId: item.connectionId || null,
+            apiKey: item.apiKey || null,
+            endpoint: item.endpoint || null,
+            project: item.project || null,
             timestamp: item.timestamp,
             status: item.status || null,
             latency: item.latency || {},
@@ -101,8 +104,8 @@ async function flushToDatabase() {
           };
 
           db.run(
-            `INSERT INTO requestDetails(id, timestamp, provider, model, connectionId, status, data) VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET timestamp = excluded.timestamp, provider = excluded.provider, model = excluded.model, connectionId = excluded.connectionId, status = excluded.status, data = excluded.data`,
-            [record.id, record.timestamp, record.provider, record.model, record.connectionId, record.status, stringifyJson(record)]
+            `INSERT INTO requestDetails(id, timestamp, provider, model, connectionId, apiKey, project, status, data) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET timestamp = excluded.timestamp, provider = excluded.provider, model = excluded.model, connectionId = excluded.connectionId, apiKey = excluded.apiKey, project = excluded.project, status = excluded.status, data = excluded.data`,
+            [record.id, record.timestamp, record.provider, record.model, record.connectionId, record.apiKey, record.project, record.status, stringifyJson(record)]
           );
         }
 
@@ -149,6 +152,15 @@ export async function getRequestDetails(filter = {}) {
   if (filter.provider) { conds.push("provider = ?"); params.push(filter.provider); }
   if (filter.model) { conds.push("model = ?"); params.push(filter.model); }
   if (filter.connectionId) { conds.push("connectionId = ?"); params.push(filter.connectionId); }
+  if (filter.apiKey) { conds.push("apiKey = ?"); params.push(filter.apiKey); }
+  if (filter.project) {
+    if (filter.project === "__untagged__") {
+      conds.push("(project IS NULL OR project = '')");
+    } else {
+      conds.push("project = ?");
+      params.push(filter.project);
+    }
+  }
   if (filter.status) { conds.push("status = ?"); params.push(filter.status); }
   if (filter.startDate) { conds.push("timestamp >= ?"); params.push(new Date(filter.startDate).toISOString()); }
   if (filter.endDate) { conds.push("timestamp <= ?"); params.push(new Date(filter.endDate).toISOString()); }
@@ -167,11 +179,36 @@ export async function getRequestDetails(filter = {}) {
     [...params, pageSize, offset]
   );
   const details = rows.map((r) => parseJson(r.data, {}));
+  const enrichedDetails = await withKeyNames(details);
 
   return {
-    details,
+    details: enrichedDetails,
     pagination: { page, pageSize, totalItems, totalPages, hasNext: page < totalPages, hasPrev: page > 1 },
   };
+}
+
+// Return a new array of details, each carrying a human-readable `keyName`,
+// matching the rule usageRepo uses so naming stays consistent across the usage
+// charts and the details tab: the key's configured name, else its masked prefix,
+// else a local sentinel. Failures degrade to the masked prefix rather than
+// breaking the listing.
+async function withKeyNames(details) {
+  let apiKeyMap = {};
+  try {
+    const { getApiKeys } = await import("./apiKeysRepo.js");
+    const apiKeys = await getApiKeys();
+    for (const apiKey of apiKeys) apiKeyMap[apiKey.key] = apiKey.name;
+  } catch (error) {
+    console.error("[requestDetailsRepo] Failed to load API keys for keyName enrichment:", error);
+    apiKeyMap = {};
+  }
+
+  return details.map((detail) => ({ ...detail, keyName: resolveKeyName(detail.apiKey, apiKeyMap) }));
+}
+
+function resolveKeyName(apiKey, apiKeyMap) {
+  if (!apiKey || typeof apiKey !== "string") return "Local (No API Key)";
+  return apiKeyMap[apiKey] || `${apiKey.slice(0, 8)}...`;
 }
 
 export async function getRequestDetailById(id) {

@@ -1,6 +1,9 @@
 # VCS
 .git
 **/.git
+.github
+.gitignore
+.npmignore
 
 # Editor
 .vscode
@@ -8,7 +11,9 @@
 
 # Dependencies and build output
 node_modules
+**/node_modules
 .next
+**/.next
 out
 build
 dist
@@ -30,3 +35,25 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+
+# Devkit / tooling / agent scratch — never needed at build time
+.claude
+.devkit
+.hermes
+.codegraph
+.codex-pentest
+
+# Docs / reports / examples not consumed by the build
+report
+docs
+gitbook
+images
+CHANGELOG.md
+README.md
+README.zh-CN.md
+DOCKER.md
+LICENSE
+
+# Tests and test tooling
+tests
+tester

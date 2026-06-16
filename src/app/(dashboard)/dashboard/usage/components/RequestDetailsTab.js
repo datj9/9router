@@ -11,12 +11,12 @@ import { AI_PROVIDERS, getProviderByAlias } from "@/shared/constants/providers";
 let providerNameCache = null;
 let providerNodesCache = null;
 
-async function fetchProviderNames() {
+async function fetchProviderNames(signal) {
   if (providerNameCache && providerNodesCache) {
     return { providerNameCache, providerNodesCache };
   }
 
-  const nodesRes = await fetch("/api/provider-nodes");
+  const nodesRes = await fetch("/api/provider-nodes", { signal });
   const nodesData = await nodesRes.json();
   const nodes = nodesData.nodes || [];
   providerNodesCache = {};
@@ -88,6 +88,17 @@ function getInputTokens(tokens) {
   return prompt < cache ? cache : prompt;
 }
 
+function formatApiKeyPrefix(apiKey) {
+  if (!apiKey || typeof apiKey !== "string") return "-";
+  return apiKey.length > 8 ? apiKey.slice(0, 8) : apiKey;
+}
+
+const UNTAGGED_PROJECT_VALUE = "__untagged__";
+
+function formatProjectName(project) {
+  return project && typeof project === "string" ? project : "Untagged";
+}
+
 export default function RequestDetailsTab() {
   const [details, setDetails] = useState([]);
   const [pagination, setPagination] = useState({
@@ -100,27 +111,90 @@ export default function RequestDetailsTab() {
   const [selectedDetail, setSelectedDetail] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [providers, setProviders] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [apiKeys, setApiKeys] = useState([]);
   const [providerNameCache, setProviderNameCache] = useState(null);
   const [filters, setFilters] = useState({
     provider: "",
+    project: "",
+    apiKeyId: "",
     startDate: "",
     endDate: ""
   });
 
-  const fetchProviders = useCallback(async () => {
+  const fetchProviders = useCallback(async (signal) => {
     try {
-      const res = await fetch("/api/usage/providers");
+      const res = await fetch("/api/usage/providers", { signal });
       const data = await res.json();
+      if (signal?.aborted) return;
       setProviders(data.providers || []);
 
-      const cache = await fetchProviderNames();
+      const cache = await fetchProviderNames(signal);
+      if (signal?.aborted) return;
       setProviderNameCache(cache.providerNameCache);
     } catch (error) {
-      console.error("Failed to fetch providers:", error);
+      if (error.name !== "AbortError") {
+        console.error("Failed to fetch providers:", error);
+      }
     }
   }, []);
 
-  const fetchDetails = useCallback(async () => {
+  const fetchProjects = useCallback(async (signal) => {
+    try {
+      const res = await fetch("/api/usage/stats?period=all", { signal });
+      const data = await res.json();
+      if (signal?.aborted) return;
+      const projectNames = new Set();
+      let hasUntagged = false;
+
+      for (const entry of Object.values(data.byProject || {})) {
+        if (entry.project && typeof entry.project === "string") {
+          projectNames.add(entry.project);
+        } else {
+          hasUntagged = true;
+        }
+      }
+
+      const projectOptions = [...projectNames]
+        .sort((first, second) => first.localeCompare(second))
+        .map((name) => ({ value: name, label: name }));
+
+      if (hasUntagged) {
+        projectOptions.push({ value: UNTAGGED_PROJECT_VALUE, label: "Untagged" });
+      }
+
+      setProjects(projectOptions);
+    } catch (error) {
+      if (error.name !== "AbortError") {
+        console.error("Failed to fetch projects:", error);
+      }
+    }
+  }, []);
+
+  const fetchApiKeys = useCallback(async (signal) => {
+    try {
+      const res = await fetch("/api/keys", { signal });
+      const keysResponse = await res.json();
+      if (signal?.aborted) return;
+
+      // Option value is the key id, not the secret value — the id is what gets
+      // sent as a query param, keeping the raw key out of request URLs / logs.
+      const keyOptions = (keysResponse.keys || [])
+        .filter((key) => key.id)
+        .map((key) => ({
+          value: key.id,
+          label: key.name || formatApiKeyPrefix(key.key)
+        }));
+
+      setApiKeys(keyOptions);
+    } catch (error) {
+      if (error.name !== "AbortError") {
+        console.error("Failed to fetch API keys:", error);
+      }
+    }
+  }, []);
+
+  const fetchDetails = useCallback(async (signal) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -128,27 +202,40 @@ export default function RequestDetailsTab() {
         pageSize: pagination.pageSize.toString()
       });
       if (filters.provider) params.append("provider", filters.provider);
+      if (filters.project) params.append("project", filters.project);
+      if (filters.apiKeyId) params.append("apiKeyId", filters.apiKeyId);
       if (filters.startDate) params.append("startDate", filters.startDate);
       if (filters.endDate) params.append("endDate", filters.endDate);
 
-      const res = await fetch(`/api/usage/request-details?${params}`);
-      const data = await res.json();
+      const res = await fetch(`/api/usage/request-details?${params}`, { signal });
+      const detailsResponse = await res.json();
+      if (signal?.aborted) return;
 
-      setDetails(data.details || []);
-      setPagination(prev => ({ ...prev, ...data.pagination }));
+      setDetails(detailsResponse.details || []);
+      setPagination(prev => ({ ...prev, ...detailsResponse.pagination }));
     } catch (error) {
-      console.error("Failed to fetch request details:", error);
+      if (error.name !== "AbortError") {
+        console.error("Failed to fetch request details:", error);
+      }
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
   }, [pagination.page, pagination.pageSize, filters]);
 
   useEffect(() => {
-    fetchProviders();
-  }, [fetchProviders]);
+    const controller = new AbortController();
+    fetchProviders(controller.signal);
+    fetchProjects(controller.signal);
+    fetchApiKeys(controller.signal);
+    return () => controller.abort();
+  }, [fetchProviders, fetchProjects, fetchApiKeys]);
 
   useEffect(() => {
-    fetchDetails();
+    const controller = new AbortController();
+    fetchDetails(controller.signal);
+    return () => controller.abort();
   }, [fetchDetails]);
 
   const handleViewDetail = (detail) => {
@@ -165,13 +252,13 @@ export default function RequestDetailsTab() {
   };
 
   const handleClearFilters = () => {
-    setFilters({ provider: "", startDate: "", endDate: "" });
+    setFilters({ provider: "", project: "", apiKeyId: "", startDate: "", endDate: "" });
   };
 
   return (
     <div className="flex min-w-0 flex-col gap-6">
       <Card padding="md">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-6">
           <div className="flex min-w-0 flex-col gap-2">
             <label htmlFor="provider-filter" className="text-sm font-medium text-text-main">Provider</label>
             <select
@@ -193,7 +280,51 @@ export default function RequestDetailsTab() {
               ))}
             </select>
           </div>
-          
+
+          <div className="flex min-w-0 flex-col gap-2">
+            <label htmlFor="project-filter" className="text-sm font-medium text-text-main">Project</label>
+            <select
+              id="project-filter"
+              value={filters.project}
+              onChange={(e) => setFilters({ ...filters, project: e.target.value })}
+              className={cn(
+                "h-9 px-3 rounded-lg border border-black/10 dark:border-white/10 bg-surface",
+                "text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/20",
+                "w-full min-w-0 cursor-pointer"
+              )}
+              style={{ colorScheme: 'auto' }}
+            >
+              <option value="">All Projects</option>
+              {projects.map((project) => (
+                <option key={project.value} value={project.value}>
+                  {project.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex min-w-0 flex-col gap-2">
+            <label htmlFor="apikey-filter" className="text-sm font-medium text-text-main">API Key</label>
+            <select
+              id="apikey-filter"
+              value={filters.apiKeyId}
+              onChange={(e) => setFilters({ ...filters, apiKeyId: e.target.value })}
+              className={cn(
+                "h-9 px-3 rounded-lg border border-black/10 dark:border-white/10 bg-surface",
+                "text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/20",
+                "w-full min-w-0 cursor-pointer"
+              )}
+              style={{ colorScheme: 'auto' }}
+            >
+              <option value="">All API Keys</option>
+              {apiKeys.map((apiKey) => (
+                <option key={apiKey.value} value={apiKey.value}>
+                  {apiKey.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div className="flex min-w-0 flex-col gap-2">
             <label htmlFor="start-date-filter" className="text-sm font-medium text-text-main">Start Date</label>
             <input
@@ -227,7 +358,7 @@ export default function RequestDetailsTab() {
             <Button 
               variant="ghost" 
               onClick={handleClearFilters}
-              disabled={!filters.provider && !filters.startDate && !filters.endDate}
+              disabled={!filters.provider && !filters.project && !filters.apiKeyId && !filters.startDate && !filters.endDate}
               className="w-full"
             >
               Clear Filters
@@ -238,12 +369,14 @@ export default function RequestDetailsTab() {
 
       <Card padding="none">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[880px]">
+          <table className="w-full min-w-[980px]">
             <thead>
               <tr className="border-b border-black/5 dark:border-white/5">
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Timestamp</th>
+                <th className="text-left p-4 text-sm font-semibold text-text-main">API Key</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Model</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Provider</th>
+                <th className="text-left p-4 text-sm font-semibold text-text-main">Project</th>
                 <th className="text-right p-4 text-sm font-semibold text-text-main">Input Tokens</th>
                 <th className="text-right p-4 text-sm font-semibold text-text-main">Output Tokens</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Latency</th>
@@ -253,7 +386,7 @@ export default function RequestDetailsTab() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan="7" className="p-8 text-center text-text-muted">
+                  <td colSpan="9" className="p-8 text-center text-text-muted">
                     <div className="flex items-center justify-center gap-2">
                       <span className="material-symbols-outlined animate-spin text-[20px]">progress_activity</span>
                       Loading...
@@ -262,7 +395,7 @@ export default function RequestDetailsTab() {
                 </tr>
               ) : details.length === 0 ? (
                 <tr>
-                  <td colSpan="7" className="p-8 text-center text-text-muted">
+                  <td colSpan="9" className="p-8 text-center text-text-muted">
                     No request details found
                   </td>
                 </tr>
@@ -275,6 +408,14 @@ export default function RequestDetailsTab() {
                     <td className="whitespace-nowrap p-4 text-sm text-text-main">
                       {new Date(detail.timestamp).toLocaleString()}
                     </td>
+                    <td
+                      className="max-w-[180px] truncate p-4 text-sm text-text-main"
+                      title={detail.keyName && detail.apiKey
+                        ? `${detail.keyName} (${formatApiKeyPrefix(detail.apiKey)})`
+                        : formatApiKeyPrefix(detail.apiKey)}
+                    >
+                      {detail.keyName || formatApiKeyPrefix(detail.apiKey)}
+                    </td>
                     <td className="max-w-[260px] truncate p-4 font-mono text-sm text-text-main">
                       {detail.model}
                     </td>
@@ -283,6 +424,9 @@ export default function RequestDetailsTab() {
                          {getProviderName(detail.provider, providerNameCache)}
                        </span>
                      </td>
+                    <td className="max-w-[180px] truncate p-4 text-sm text-text-main">
+                      {formatProjectName(detail.project)}
+                    </td>
                     <td className="p-4 text-sm text-text-main text-right font-mono">
                       {getInputTokens(detail.tokens).toLocaleString()}
                     </td>
@@ -346,6 +490,10 @@ export default function RequestDetailsTab() {
                  <span className="text-text-main font-medium">{getProviderName(selectedDetail.provider, providerNameCache)}</span>
                </div>
               <div>
+                <span className="text-text-muted">Project:</span>{" "}
+                <span className="text-text-main font-medium">{formatProjectName(selectedDetail.project)}</span>
+              </div>
+              <div>
                 <span className="text-text-muted">Model:</span>{" "}
                 <span className="text-text-main font-mono">{selectedDetail.model}</span>
               </div>
@@ -363,6 +511,13 @@ export default function RequestDetailsTab() {
                 <span className="text-text-main font-mono">
                   TTFT {selectedDetail.latency?.ttft || 0}ms / Total {selectedDetail.latency?.total || 0}ms
                 </span>
+              </div>
+              <div>
+                <span className="text-text-muted">API Key:</span>{" "}
+                <span className="text-text-main">{selectedDetail.keyName || formatApiKeyPrefix(selectedDetail.apiKey)}</span>
+                {selectedDetail.keyName && selectedDetail.apiKey ? (
+                  <span className="ms-1 font-mono text-xs text-text-muted">({formatApiKeyPrefix(selectedDetail.apiKey)})</span>
+                ) : null}
               </div>
               <div>
                 <span className="text-text-muted">Input Tokens:</span>{" "}

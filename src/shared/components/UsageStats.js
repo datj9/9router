@@ -16,6 +16,8 @@ import OverviewCards from "@/app/(dashboard)/dashboard/usage/components/Overview
 import UsageTable, { fmt, fmtTime } from "@/app/(dashboard)/dashboard/usage/components/UsageTable";
 import ProviderTopology from "@/app/(dashboard)/dashboard/usage/components/ProviderTopology";
 import UsageChart from "@/app/(dashboard)/dashboard/usage/components/UsageChart";
+import ApiKeyUsageChart from "@/app/(dashboard)/dashboard/usage/components/ApiKeyUsageChart";
+import ProjectModelChart from "@/app/(dashboard)/dashboard/usage/components/ProjectModelChart";
 
 function timeAgo(timestamp) {
   const diff = Math.floor((Date.now() - new Date(timestamp)) / 1000);
@@ -110,6 +112,7 @@ function getGroupKey(item, keyField) {
     case "accountName": return item.accountName || `Account ${item.connectionId?.slice(0, 8)}...` || "Unknown Account";
     case "keyName": return item.keyName || "Unknown Key";
     case "endpoint": return item.endpoint || "Unknown Endpoint";
+    case "projectName": return item.projectName || "Untagged";
     default: return item[keyField] || "Unknown";
   }
 }
@@ -174,10 +177,19 @@ const ENDPOINT_COLUMNS = [
   { field: "lastUsed", label: "Last Used", align: "right" },
 ];
 
+const PROJECT_COLUMNS = [
+  { field: "projectName", label: "Project" },
+  { field: "rawModel", label: "Model" },
+  { field: "provider", label: "Provider" },
+  { field: "requests", label: "Requests", align: "right" },
+  { field: "lastUsed", label: "Last Used", align: "right" },
+];
+
 const TABLE_OPTIONS = [
   { value: "model", label: "Usage by Model" },
   { value: "account", label: "Usage by Account" },
   { value: "apiKey", label: "Usage by API Key" },
+  { value: "project", label: "Usage by Project" },
   { value: "endpoint", label: "Usage by Endpoint" },
 ];
 
@@ -189,21 +201,25 @@ const PERIODS = [
   { value: "60d", label: "60D" },
 ];
 
-export default function UsageStats({ period: periodProp, setPeriod: setPeriodProp, hidePeriodSelector = false } = {}) {
+export default function UsageStats({ period: periodProp, setPeriod: setPeriodProp, hidePeriodSelector = false, defaultTableView = "model", lockTableView = false, isProjectFocused = false } = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const sortBy = searchParams.get("sortBy") || "rawModel";
+  // On a project-first page, groups should lead with the project name rather
+  // than the model. Everywhere else keep the model-centric default.
+  const defaultSortField = isProjectFocused ? "projectName" : "rawModel";
+  const sortBy = searchParams.get("sortBy") || defaultSortField;
   const sortOrder = searchParams.get("sortOrder") || "asc";
 
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
-  const [tableView, setTableView] = useState("model");
+  const [tableView, setTableView] = useState(defaultTableView);
   const [viewMode, setViewMode] = useState("costs");
   const [providers, setProviders] = useState([]);
   const [periodLocal, setPeriodLocal] = useState("today");
   const isInitialLoad = useRef(true);
+  const activeStatsController = useRef(null);
   const hasLoadedStats = useRef(false);
   const period = periodProp ?? periodLocal;
   const setPeriod = setPeriodProp ?? setPeriodLocal;
@@ -240,8 +256,9 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       .catch(() => {});
   }, []);
 
-  // Fetch filtered stats via REST when period changes
-  useEffect(() => {
+  // Fetch filtered stats via REST. Shared by the period effect and the manual
+  // reload button so both go through the same loading/fetching indicators.
+  const fetchStats = useCallback((signal) => {
     // First load: show full spinner; subsequent: show subtle fetching indicator
     if (isInitialLoad.current) {
       isInitialLoad.current = false;
@@ -250,20 +267,35 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       setFetching(true);
     }
 
-    fetch(`/api/usage/stats?period=${period}`)
+    return fetch(`/api/usage/stats?period=${period}`, { signal })
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
-        if (data) {
+        if (data && !signal?.aborted) {
           hasLoadedStats.current = true;
           setStats((prev) => ({ ...prev, ...data }));
         }
       })
-      .catch(() => {})
+      .catch((error) => {
+        if (error.name !== "AbortError") console.error("[UsageStats] fetch failed:", error);
+      })
       .finally(() => {
-        setLoading(false);
-        setFetching(false);
+        if (!signal?.aborted) {
+          setLoading(false);
+          setFetching(false);
+        }
       });
   }, [period]);
+
+  useEffect(() => {
+    activeStatsController.current?.abort();
+    const controller = new AbortController();
+    activeStatsController.current = controller;
+    fetchStats(controller.signal);
+    return () => {
+      controller.abort();
+      if (activeStatsController.current === controller) activeStatsController.current = null;
+    };
+  }, [fetchStats]);
 
   // SSE connection - real-time updates for activeRequests + recentRequests only
   useEffect(() => {
@@ -368,6 +400,31 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
           ),
         };
       }
+      case "project": {
+        return {
+          columns: PROJECT_COLUMNS,
+          groupedData: groupDataByKey(sortData(stats.byProject, {}, sortBy, sortOrder), "projectName"),
+          storageKey: "usage-stats:expanded-projects",
+          emptyMessage: "No project usage recorded yet. Send the x-project header to tag requests.",
+          renderSummaryCells: (group) => (
+            <>
+              <td className="px-6 py-3 text-text-muted">—</td>
+              <td className="px-6 py-3 text-text-muted">—</td>
+              <td className="px-6 py-3 text-right">{fmt(group.summary.requests)}</td>
+              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(group.summary.lastUsed)}</td>
+            </>
+          ),
+          renderDetailCells: (item) => (
+            <>
+              <td className="px-6 py-3 font-medium">{item.projectName}</td>
+              <td className="px-6 py-3">{item.rawModel}</td>
+              <td className="px-6 py-3"><Badge variant="neutral" size="sm">{item.provider}</Badge></td>
+              <td className="px-6 py-3 text-right">{fmt(item.requests)}</td>
+              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(item.lastUsed)}</td>
+            </>
+          ),
+        };
+      }
       case "apiKey": {
         return {
           columns: API_KEY_COLUMNS,
@@ -432,32 +489,48 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
 
   return (
     <div className="flex min-w-0 flex-col gap-6">
-      {/* Period selector (hidden when controlled by parent) */}
-      {!hidePeriodSelector && (
+      {/* Period selector (hidden when controlled by parent) + manual reload */}
+      {(!hidePeriodSelector || isProjectFocused) && (
         <div className="flex w-full items-center gap-2 sm:w-auto sm:self-end">
-          <div className="grid flex-1 grid-cols-5 items-center gap-1 rounded-lg border border-border bg-bg-subtle p-1 sm:flex sm:flex-none">
-            {PERIODS.map((p) => (
-              <button
-                key={p.value}
-                onClick={() => setPeriod(p.value)}
-                disabled={fetching}
-                className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${period === p.value ? "bg-primary text-white shadow-sm" : "text-text-muted hover:bg-bg-hover hover:text-text"}`}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-          {fetching && (
-            <span className="material-symbols-outlined text-[16px] text-text-muted animate-spin">progress_activity</span>
+          {!hidePeriodSelector && (
+            <div className="grid flex-1 grid-cols-5 items-center gap-1 rounded-lg border border-border bg-bg-subtle p-1 sm:flex sm:flex-none">
+              {PERIODS.map((p) => (
+                <button
+                  key={p.value}
+                  onClick={() => setPeriod(p.value)}
+                  disabled={fetching}
+                  className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${period === p.value ? "bg-primary text-white shadow-sm" : "text-text-muted hover:bg-bg-hover hover:text-text"}`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
           )}
+          <button
+            onClick={() => {
+              activeStatsController.current?.abort();
+              const controller = new AbortController();
+              activeStatsController.current = controller;
+              fetchStats(controller.signal);
+            }}
+            disabled={fetching}
+            title="Reload data"
+            className="flex items-center gap-1.5 rounded-lg border border-border bg-bg-subtle px-3 py-1.5 text-sm font-medium text-text-muted transition-colors hover:bg-bg-hover hover:text-text disabled:opacity-50"
+          >
+            <span className={`material-symbols-outlined text-[18px] ${fetching ? "animate-spin" : ""}`}>refresh</span>
+            Reload
+          </button>
         </div>
       )}
 
       {/* Overview cards */}
       {loading ? spinner : <OverviewCards stats={stats} />}
 
-      {/* Provider topology + Recent Requests */}
-      {loading ? spinner : (
+      {/* Model usage by project — project-first chart */}
+      {isProjectFocused && (loading ? spinner : <ProjectModelChart byProject={stats.byProject} />)}
+
+      {/* Provider topology + Recent Requests — model/provider-centric, hidden on project-first pages */}
+      {!isProjectFocused && (loading ? spinner : (
         <div className="grid min-w-0 grid-cols-1 items-stretch gap-2 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
           <ProviderTopology
             providers={providers}
@@ -467,24 +540,33 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
           />
           <RecentRequests requests={stats.recentRequests || []} />
         </div>
-      )}
+      ))}
 
       {/* Token / Cost chart - sync period */}
-      {loading ? spinner : <UsageChart period={period} />}
+      {!isProjectFocused && (loading ? spinner : <UsageChart period={period} />)}
+
+      {/* API key usage by model / project */}
+      {loading ? spinner : <ApiKeyUsageChart byApiKey={stats.byApiKey} byApiKeyProject={stats.byApiKeyProject} />}
 
       {/* Table with dropdown selector */}
       <div className="flex flex-col gap-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <select
-            value={tableView}
-            onChange={(e) => setTableView(e.target.value)}
-            className="w-full rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text-main focus:outline-none focus:ring-2 focus:ring-primary/50 sm:w-auto"
-            style={{ colorScheme: 'auto' }}
-          >
-            {TABLE_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
+          {lockTableView ? (
+            <span className="text-sm font-medium text-text-main">
+              {TABLE_OPTIONS.find((opt) => opt.value === tableView)?.label || "Usage"}
+            </span>
+          ) : (
+            <select
+              value={tableView}
+              onChange={(e) => setTableView(e.target.value)}
+              className="w-full rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text-main focus:outline-none focus:ring-2 focus:ring-primary/50 sm:w-auto"
+              style={{ colorScheme: 'auto' }}
+            >
+              {TABLE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          )}
           <div className="grid grid-cols-2 items-center gap-1 rounded-lg border border-border bg-bg-subtle p-1 sm:flex">
             <button
               onClick={() => setViewMode("costs")}
