@@ -163,7 +163,7 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
 
   const usage = extractUsageFromResponse(responseBody);
   appendLog({ tokens: usage, status: "200 OK" });
-  saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint });
+  saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, project: clientRawRequest?.project });
 
   const translatedResponse = needsTranslation(targetFormat, sourceFormat)
     ? translateNonStreamingResponse(responseBody, targetFormat, sourceFormat)
@@ -205,7 +205,7 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
 
   const totalLatency = Date.now() - requestStartTime;
   saveRequestDetail(buildRequestDetail({
-    provider, model, connectionId,
+    provider, model, connectionId, apiKey,
     latency: { ttft: totalLatency, total: totalLatency },
     tokens: usage || { prompt_tokens: 0, completion_tokens: 0 },
     request: extractRequestConfig(body, stream),
@@ -217,7 +217,7 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
       finish_reason: translatedResponse?.choices?.[0]?.finish_reason || "unknown"
     },
     status: "success"
-  }, { endpoint: clientRawRequest?.endpoint || null })).catch(err => {
+  }, { endpoint: clientRawRequest?.endpoint || null, project: clientRawRequest?.project || null })).catch(err => {
     console.error("[RequestDetail] Failed to save:", err.message);
   });
 

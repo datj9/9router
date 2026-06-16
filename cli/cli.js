@@ -60,7 +60,11 @@ const APP_NAME = pkg.name; // Use from package.json
 const INSTALL_CMD_LATEST = `npm i -g ${APP_NAME}@latest --prefer-online`;
 
 const DEFAULT_PORT = 20128;
-const DEFAULT_HOST = "0.0.0.0";
+// Bind to loopback by default so local no-auth conveniences are not reachable
+// from the network. Network exposure is explicit opt-in via --host 0.0.0.0,
+// which then correctly requires API-key / login auth (see dashboardGuard.js).
+const DEFAULT_HOST = "127.0.0.1";
+const ALL_INTERFACES_HOST = "0.0.0.0";
 
 // First non-internal IPv4 — the address remote peers actually reach when bound to 0.0.0.0.
 function getLanIp() {
@@ -74,7 +78,7 @@ function getLanIp() {
 
 // Local URL stays "localhost"; warn separately when bound to all interfaces (network-exposed).
 function getDisplayHost() {
-  return host === DEFAULT_HOST ? "localhost" : host;
+  return host === DEFAULT_HOST || host === ALL_INTERFACES_HOST ? "localhost" : host;
 }
 const MAX_PORT_ATTEMPTS = 10;
 // Identifiers for killAllAppProcesses - only kill 9router specifically
@@ -559,8 +563,8 @@ const RESTART_RESET_MS = 30000; // Reset counter if alive > 30s
 function startServer(latestVersion) {
   const displayHost = getDisplayHost();
   const url = `http://${displayHost}:${port}/dashboard`;
-  // Surface real network exposure when bound to all interfaces (default 0.0.0.0).
-  if (host === DEFAULT_HOST) {
+  // Surface real network exposure when explicitly bound to all interfaces (--host 0.0.0.0).
+  if (host === ALL_INTERFACES_HOST) {
     const lanIp = getLanIp();
     if (lanIp) console.log(`\x1b[33m⚠ Network-exposed: reachable at http://${lanIp}:${port} (bound 0.0.0.0). Use --host 127.0.0.1 for local-only.\x1b[0m`);
   }

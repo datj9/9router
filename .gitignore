@@ -67,11 +67,20 @@ package-lock.json
 .github/instructions/codacy.instructions.md
 README1.md
 deploy*.sh
+# Tracked deploy tooling (pairs with rollback.sh + scripts/maintenance/)
+!/deploy.sh
 ecosystem.config.*
 
 scripts/agSniffer/*
 gitbooks/*
 gitbook/README.md
+
+# Claude Code local harness
+.claude/
+
+# Local tool scratch (codegraph index, codex pentest artifacts — contains secrets)
+.codegraph/
+.codex-pentest/
 
 # Refactor backup reference (do not bundle/lint)
 open-sse.old/

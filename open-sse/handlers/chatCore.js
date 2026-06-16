@@ -17,6 +17,7 @@ import { buildRequestDetail, extractRequestConfig } from "./chatCore/requestDeta
 import { handleForcedSSEToJson } from "./chatCore/sseToJsonHandler.js";
 import { handleNonStreamingResponse } from "./chatCore/nonStreamingHandler.js";
 import { handleStreamingResponse, buildOnStreamComplete } from "./chatCore/streamingHandler.js";
+import { createJsonKeepaliveResponse } from "../utils/jsonKeepalive.js";
 import { detectClientTool, isNativePassthrough } from "../utils/clientDetector.js";
 import { dedupeTools } from "../utils/toolDeduper.js";
 import { injectCaveman } from "../rtk/caveman.js";
@@ -24,6 +25,18 @@ import { compressMessages, formatRtkLog } from "../rtk/index.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { stripUnsupportedModalities } from "../translator/concerns/modality.js";
 import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
+
+// Anthropic Messages top-level `effort` is Claude Opus 4.6+ only.
+// haiku/sonnet upstreams reject it with 400 invalid_request_error.
+const isEffortCapableClaude = (model = "") => /opus-4-(6|7|8)/.test(model);
+
+// Sampling params (temperature/top_p/top_k) are removed on Opus 4.7+, Opus 4.8,
+// and Fable 5 — these models reject them with 400 invalid_request_error
+// ("`temperature` is deprecated"). Opus 4.6 and earlier (and sonnet/haiku) still
+// accept them, so the strip must stay version-scoped.
+const SAMPLING_PARAMS = ["temperature", "top_p", "top_k"];
+const rejectsSamplingParams = (...models) =>
+  models.some((model = "") => /opus-4-(7|8)|fable-5/.test(model));
 
 /**
  * Core chat handler - shared between SSE and Worker
@@ -138,6 +151,23 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Covers both passthrough (source shape) and translated (target shape) flows
   const finalFormat = passthrough ? sourceFormat : targetFormat;
 
+  // Strip unsupported top-level `effort` for non-Opus claude upstreams (avoids 400)
+  if (finalFormat === "claude" && translatedBody.effort != null && !isEffortCapableClaude(model)) {
+    delete translatedBody.effort;
+    log?.debug?.("EFFORT", `stripped unsupported effort for ${model}`);
+  }
+
+  // Strip sampling params (temperature/top_p/top_k) for Opus 4.7+/4.8/Fable 5,
+  // which reject them with 400 ("`temperature` is deprecated"). Covers both the
+  // native passthrough body (Claude Code sends temperature) and translated bodies.
+  if (finalFormat === "claude" && rejectsSamplingParams(model, upstreamModel)) {
+    const stripped = SAMPLING_PARAMS.filter((param) => translatedBody[param] != null);
+    if (stripped.length > 0) {
+      for (const param of stripped) delete translatedBody[param];
+      log?.debug?.("SAMPLING", `stripped ${stripped.join(", ")} unsupported for ${model}`);
+    }
+  }
+
   // TTS models don't support tool messages/function calling
   if (getModelType(alias, model) === "tts" && translatedBody.messages) {
     translatedBody.messages = translatedBody.messages.filter(msg => msg.role !== "tool");
@@ -217,7 +247,8 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     trackPendingRequest(model, provider, connectionId, false, true);
     appendRequestLog({ model, provider, connectionId, status: `FAILED ${error.name === "AbortError" ? 499 : HTTP_STATUS.BAD_GATEWAY}` }).catch(() => { });
     saveRequestDetail(buildRequestDetail({
-      provider, model, connectionId,
+      provider, model, connectionId, apiKey,
+      endpoint: clientRawRequest?.endpoint || null,
       latency: { ttft: 0, total: Date.now() - requestStartTime },
       tokens: { prompt_tokens: 0, completion_tokens: 0 },
       request: extractRequestConfig(body, stream),
@@ -263,7 +294,8 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     const { statusCode, message, resetsAtMs } = await parseUpstreamError(providerResponse, executor);
     appendRequestLog({ model, provider, connectionId, status: `FAILED ${statusCode}` }).catch(() => { });
     saveRequestDetail(buildRequestDetail({
-      provider, model, connectionId,
+      provider, model, connectionId, apiKey,
+      endpoint: clientRawRequest?.endpoint || null,
       latency: { ttft: 0, total: Date.now() - requestStartTime },
       tokens: { prompt_tokens: 0, completion_tokens: 0 },
       request: extractRequestConfig(body, stream),
@@ -284,20 +316,30 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Provider forced streaming but client wants JSON
   if (!clientRequestedStreaming && providerRequiresStreaming) {
+    const contentType = providerResponse.headers.get("content-type") || "";
+    const isForcedSSE = contentType.includes("text/event-stream") || (contentType === "" && provider === "codex");
+    if (isForcedSSE) {
+      const resultPromise = handleForcedSSEToJson({ ...sharedCtx, providerResponse, sourceFormat, trackDone, appendLog })
+        .finally(() => streamController.handleComplete());
+      return await createJsonKeepaliveResponse(resultPromise);
+    }
+
     const result = await handleForcedSSEToJson({ ...sharedCtx, providerResponse, sourceFormat, trackDone, appendLog });
     if (result) { streamController.handleComplete(); return result; }
   }
 
   // True non-streaming response
   if (!stream) {
-    const result = await handleNonStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, reqLogger, toolNameMap, trackDone, appendLog });
-    streamController.handleComplete();
-    return result;
+    const resultPromise = handleNonStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, reqLogger, toolNameMap, trackDone, appendLog })
+      .finally(() => streamController.handleComplete());
+    return await createJsonKeepaliveResponse(resultPromise);
   }
 
-  // Streaming response
-  const { onStreamComplete } = buildOnStreamComplete({ ...sharedCtx });
-  return handleStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, streamController, onStreamComplete });
+  // Streaming response — placeholder row and completion update must share one
+  // detail id so the upsert updates the same row instead of inserting an
+  // orphan stuck at "[Streaming in progress...]" with 0 tokens.
+  const { onStreamComplete, streamDetailId } = buildOnStreamComplete({ ...sharedCtx });
+  return handleStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, streamController, onStreamComplete, streamDetailId });
 }
 
 export function isTokenExpiringSoon(expiresAt, bufferMs = 5 * 60 * 1000) {

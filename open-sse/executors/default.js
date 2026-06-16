@@ -7,6 +7,13 @@ import { getCachedClaudeHeaders } from "../utils/claudeHeaderCache.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 
+// The `context-1m-2025-08-07` Anthropic-Beta flag (1M context window) requires a
+// subscription entitlement. Accounts without it get 400 "The long context beta is
+// not yet available for this subscription." on real (large-context) requests. The
+// flag can reach the upstream from the static spoof header OR from cached real
+// Claude Code client headers, so it is stripped from every claude request here.
+const CONTEXT_1M_BETA_FLAG = "context-1m-2025-08-07";
+
 // Auth header descriptors — derived from registry transport.auth, fallback to hardcoded defaults.
 const BEARER = { combined: true, header: "Authorization", scheme: "bearer" };
 const XAPIKEY = { combined: true, header: "x-api-key", scheme: "raw" };
@@ -159,6 +166,25 @@ export class DefaultExecutor extends BaseExecutor {
     // Hooks run BEFORE auth so dynamic overlays (claude cached headers) can't clobber the token.
     for (const hook of desc.hooks || []) HEADER_HOOKS[hook]?.(headers, credentials);
     applyAuth(headers, desc, credentials);
+
+    // Strip the 1M-context beta flag from every claude request — it requires a
+    // subscription entitlement this proxy can't assume, and rejected requests
+    // 400. Covers both the static spoof header and merged cached client headers.
+    if (this.provider === "claude") {
+      for (const betaKey of ["anthropic-beta", "Anthropic-Beta"]) {
+        if (!headers[betaKey]) continue;
+        const filtered = headers[betaKey]
+          .split(",")
+          .map(flag => flag.trim())
+          .filter(flag => flag && flag !== CONTEXT_1M_BETA_FLAG)
+          .join(",");
+        if (filtered) {
+          headers[betaKey] = filtered;
+        } else {
+          delete headers[betaKey];
+        }
+      }
+    }
 
     // Strip first-party Claude Code identity headers for non-Anthropic anthropic-compatible upstreams
     if (this.provider?.startsWith?.("anthropic-compatible-")) {

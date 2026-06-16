@@ -14,9 +14,11 @@ const SETTINGS_RESPONSE_HEADERS = {
 export async function GET() {
   try {
     const settings = await getSettings();
-    const { password, oidcClientSecret, ...safeSettings } = settings;
+    const { password, oidcClientSecret, resendApiKey, smtpPassword, ...safeSettings } = settings;
     safeSettings.oidcConfigured = !!(safeSettings.oidcIssuerUrl && safeSettings.oidcClientId && oidcClientSecret);
-    
+    safeSettings.resendApiKeyConfigured = !!resendApiKey;
+    safeSettings.smtpPasswordConfigured = !!smtpPassword;
+
     const enableRequestLogs = process.env.ENABLE_REQUEST_LOGS === "true";
     const enableTranslator = process.env.ENABLE_TRANSLATOR === "true";
     
@@ -70,6 +72,16 @@ export async function PATCH(request) {
       }
     }
 
+    // Don't overwrite a stored email secret with an empty string (the UI sends
+    // empty when the field is left blank to keep the existing value).
+    for (const secretField of ["resendApiKey", "smtpPassword"]) {
+      if (Object.prototype.hasOwnProperty.call(body, secretField)) {
+        if (!body[secretField] || !String(body[secretField]).trim()) {
+          delete body[secretField];
+        }
+      }
+    }
+
     const settings = await updateSettings(body);
 
     // Apply outbound proxy settings immediately (no restart required)
@@ -90,8 +102,10 @@ export async function PATCH(request) {
       resetComboRotation();
     }
 
-    const { password, oidcClientSecret, ...safeSettings } = settings;
+    const { password, oidcClientSecret, resendApiKey, smtpPassword, ...safeSettings } = settings;
     safeSettings.oidcConfigured = !!(safeSettings.oidcIssuerUrl && safeSettings.oidcClientId && oidcClientSecret);
+    safeSettings.resendApiKeyConfigured = !!resendApiKey;
+    safeSettings.smtpPasswordConfigured = !!smtpPassword;
     return NextResponse.json(safeSettings, { headers: SETTINGS_RESPONSE_HEADERS });
   } catch (error) {
     console.log("Error updating settings:", error);

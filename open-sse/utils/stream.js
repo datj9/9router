@@ -5,6 +5,7 @@ import { extractUsage, hasValidUsage, estimateUsage, logUsage, addBufferToUsage,
 import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE } from "./streamHelpers.js";
 import { getOpenAIResponsesEventName, isOpenAIResponsesTerminalEvent, formatIncompleteOpenAIResponsesStreamFailure } from "./responsesStreamHelpers.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
+import { STREAM_HEARTBEAT_INTERVAL_MS } from "../config/runtimeConfig.js";
 
 import { SSE_DONE, SSE_HEADERS, SSE_HEADERS_NO_BUFFER } from "./sseConstants.js";
 
@@ -13,6 +14,15 @@ export { SSE_DONE, SSE_HEADERS, SSE_HEADERS_NO_BUFFER };
 
 // sharedEncoder is stateless — safe to share across streams
 const sharedEncoder = new TextEncoder();
+
+// Idle keepalive. Claude with extended thinking can stream ZERO bytes for 60s+
+// while reasoning before the first token. A proxy in front of 9router
+// (Cloudflare Tunnel, nginx, etc.) sees that silence as an idle connection and
+// kills it at ~55-60s, so the request aborts before any token arrives (ttft is
+// null, 0 tokens). Emitting an SSE comment line on a timer keeps the connection
+// active. Comment lines (": ...") are ignored by every spec-compliant SSE
+// client (Anthropic/OpenAI SDKs included), so this is invisible to callers.
+const HEARTBEAT_COMMENT = ": 9router-keepalive\n\n";
 
 /**
  * Stream modes
@@ -48,7 +58,8 @@ export function createSSEStream(options = {}) {
     connectionId = null,
     body = null,
     onStreamComplete = null,
-    apiKey = null
+    apiKey = null,
+    heartbeatIntervalMs = STREAM_HEARTBEAT_INTERVAL_MS
   } = options;
 
   let buffer = "";
@@ -67,14 +78,76 @@ export function createSSEStream(options = {}) {
   let sseEmittedCount = 0;
   const eventTypeCounts = {};
 
+  // Guards onStreamComplete to a single invocation. flush() runs only on clean
+  // upstream EOF; cancel() runs on client disconnect, stall-abort, or upstream
+  // error. Without finalizing on cancel(), the streaming request detail row
+  // stays stuck at "[Streaming in progress...]" with 0 tokens forever.
+  // Idle-keepalive timer. Reset on every upstream chunk; fires only when the
+  // upstream has been silent for heartbeatIntervalMs. Cleared once the stream
+  // terminates (flush or cancel) so it never outlives the connection.
+  let heartbeatTimer = null;
+  let heartbeatController = null;
+  const stopHeartbeat = () => {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  };
+  const startHeartbeat = (controller) => {
+    heartbeatController = controller;
+    if (heartbeatIntervalMs <= 0 || heartbeatTimer) return;
+    heartbeatTimer = setInterval(() => {
+      if (finalized) {
+        stopHeartbeat();
+        return;
+      }
+      try {
+        heartbeatController.enqueue(sharedEncoder.encode(HEARTBEAT_COMMENT));
+        reqLogger?.appendConvertedChunk?.(HEARTBEAT_COMMENT);
+      } catch {
+        // Controller already closed/errored — nothing left to keep alive.
+        stopHeartbeat();
+      }
+    }, heartbeatIntervalMs);
+  };
+  const resetHeartbeat = (controller) => {
+    stopHeartbeat();
+    startHeartbeat(controller);
+  };
+
+  let finalized = false;
+  const finalizeOnce = (interruptedReason = null) => {
+    if (finalized) return;
+    finalized = true;
+    stopHeartbeat();
+    if (!onStreamComplete) return;
+    const finalUsage = (mode === STREAM_MODE.TRANSLATE ? state?.usage : usage) || null;
+    onStreamComplete(
+      { content: accumulatedContent, thinking: accumulatedThinking },
+      finalUsage,
+      ttftAt,
+      interruptedReason
+    );
+  };
+
   // Track Responses API event framing for same-format passthrough (codex)
   let currentOpenAIResponsesEvent = null;
   let openAIResponsesTerminalSeen = false;
   let openAIResponsesDoneSent = false;
 
   return new TransformStream({
+    start(controller) {
+      // Begin the idle keepalive immediately — the silent gap that kills the
+      // connection happens BEFORE the first upstream chunk arrives.
+      startHeartbeat(controller);
+    },
+
     transform(chunk, controller) {
       if (!ttftAt) ttftAt = Date.now();
+      // Reset the idle keepalive after every upstream chunk. SSE comments are
+      // legal between events and keep Cloudflare/nginx from seeing silence
+      // during later thinking gaps.
+      resetHeartbeat(controller);
       const text = decoder.decode(chunk, { stream: true });
       buffer += text;
       reqLogger?.appendProviderChunk?.(text);
@@ -347,12 +420,7 @@ export function createSSEStream(options = {}) {
           reqLogger?.appendConvertedChunk?.(doneOutput);
           controller.enqueue(sharedEncoder.encode(doneOutput));
 
-          if (onStreamComplete) {
-            onStreamComplete({
-              content: accumulatedContent,
-              thinking: accumulatedThinking
-            }, usage, ttftAt);
-          }
+          finalizeOnce();
           return;
         }
 
@@ -422,14 +490,24 @@ export function createSSEStream(options = {}) {
           appendRequestLog({ model, provider, connectionId, tokens: null, status: "200 OK" }).catch(() => { });
         }
         
-        if (onStreamComplete) {
-          onStreamComplete({
-            content: accumulatedContent,
-            thinking: accumulatedThinking
-          }, state?.usage, ttftAt);
-        }
+        finalizeOnce();
       } catch (error) {
         console.log("Error in flush:", error);
+      }
+    },
+
+    // Fires on abnormal termination (client disconnect, stall-abort, upstream
+    // error) — flush() does NOT run in these cases. Finalize the detail row with
+    // whatever partial content/usage we accumulated so it never stays stuck at
+    // "[Streaming in progress...]".
+    cancel(reason) {
+      trackPendingRequest(model, provider, connectionId, false);
+      const reasonText = reason instanceof Error ? reason.message : String(reason ?? "stream cancelled");
+      dbg("SSE", `cancel | provider=${provider} | model=${model} | recvLines=${sseLineCount} | emitted=${sseEmittedCount} | reason=${reasonText}`);
+      try {
+        finalizeOnce(reasonText);
+      } catch (error) {
+        console.log("Error in cancel:", error);
       }
     }
   });

@@ -43,7 +43,7 @@ function buildTransformStream({ provider, sourceFormat, targetFormat, userAgent,
 /**
  * Handle streaming response — pipe provider SSE through transform stream to client.
  */
-export function handleStreamingResponse({ providerResponse, provider, model, sourceFormat, targetFormat, userAgent, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, streamController, onStreamComplete }) {
+export function handleStreamingResponse({ providerResponse, provider, model, sourceFormat, targetFormat, userAgent, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, streamController, onStreamComplete, streamDetailId }) {
   if (onRequestSuccess) onRequestSuccess();
 
   const transformStream = buildTransformStream({ provider, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, model, connectionId, body, onStreamComplete, apiKey });
@@ -54,9 +54,8 @@ export function handleStreamingResponse({ providerResponse, provider, model, sou
   const stallTimeoutMs = PROVIDERS[provider]?.stallTimeoutMs || STREAM_STALL_TIMEOUT_MS;
   const transformedBody = pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal, stallTimeoutMs);
 
-  const streamDetailId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
   saveRequestDetail(buildRequestDetail({
-    provider, model, connectionId,
+    provider, model, connectionId, apiKey,
     latency: { ttft: 0, total: Date.now() - requestStartTime },
     tokens: { prompt_tokens: 0, completion_tokens: 0 },
     request: extractRequestConfig(body, stream),
@@ -64,7 +63,7 @@ export function handleStreamingResponse({ providerResponse, provider, model, sou
     providerResponse: "[Streaming - raw response not captured]",
     response: { content: "[Streaming in progress...]", thinking: null, type: "streaming" },
     status: "success"
-  }, { id: streamDetailId })).catch(err => {
+  }, { id: streamDetailId, endpoint: clientRawRequest?.endpoint || null, project: clientRawRequest?.project || null })).catch(err => {
     console.error("[RequestDetail] Failed to save streaming request:", err.message);
   });
 
@@ -78,30 +77,42 @@ export function handleStreamingResponse({ providerResponse, provider, model, sou
  * Build onStreamComplete callback for streaming usage tracking.
  */
 export function buildOnStreamComplete({ provider, model, connectionId, apiKey, requestStartTime, body, stream, finalBody, translatedBody, clientRawRequest }) {
+  // Shared with the placeholder row in handleStreamingResponse via chatCore so
+  // the completion update upserts the same row instead of inserting a duplicate.
   const streamDetailId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 
-  const onStreamComplete = (contentObj, usage, ttftAt) => {
+  // interruptedReason is set when the stream ended abnormally (client
+  // disconnect, stall-abort, upstream error) — flush() never ran, so this is
+  // the only chance to finalize the row out of "[Streaming in progress...]".
+  const onStreamComplete = (contentObj, usage, ttftAt, interruptedReason = null) => {
     const latency = {
       ttft: ttftAt ? ttftAt - requestStartTime : Date.now() - requestStartTime,
       total: Date.now() - requestStartTime
     };
-    const safeContent = contentObj?.content || "[Empty streaming response]";
+    const interrupted = Boolean(interruptedReason);
+    const fallbackContent = interrupted
+      ? `[Streaming interrupted: ${interruptedReason}]`
+      : "[Empty streaming response]";
+    const safeContent = contentObj?.content || fallbackContent;
     const safeThinking = contentObj?.thinking || null;
 
     saveRequestDetail(buildRequestDetail({
-      provider, model, connectionId,
+      provider, model, connectionId, apiKey,
       latency,
       tokens: usage || { prompt_tokens: 0, completion_tokens: 0 },
       request: extractRequestConfig(body, stream),
       providerRequest: finalBody || translatedBody || null,
       providerResponse: safeContent,
-      response: { content: safeContent, thinking: safeThinking, type: "streaming" },
-      status: "success"
-    }, { id: streamDetailId })).catch(err => {
+      response: { content: safeContent, thinking: safeThinking, type: "streaming", interrupted: interrupted || undefined },
+      status: interrupted ? "interrupted" : "success"
+    }, { id: streamDetailId, endpoint: clientRawRequest?.endpoint || null, project: clientRawRequest?.project || null })).catch(err => {
       console.error("[RequestDetail] Failed to update streaming content:", err.message);
     });
 
-    saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, label: "STREAM USAGE" });
+    // Only record usage when the provider actually returned token counts.
+    // saveUsageStats already no-ops on 0/0, so interrupted requests with no
+    // usage won't pollute billing.
+    saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, project: clientRawRequest?.project, label: interrupted ? "STREAM INTERRUPTED" : "STREAM USAGE" });
   };
 
   return { onStreamComplete, streamDetailId };

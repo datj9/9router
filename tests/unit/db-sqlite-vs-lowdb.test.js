@@ -214,6 +214,7 @@ describe("DB SQLite layer — public API parity", () => {
 
     await sqliteDb.saveRequestDetail({
       id: "d1", provider: "openai", model: "gpt-4", connectionId: "c1",
+      apiKey: "sk-request-detail",
       status: "ok", tokens: { prompt_tokens: 10 },
       request: { method: "POST" }, response: { status: 200 },
     });
@@ -224,6 +225,7 @@ describe("DB SQLite layer — public API parity", () => {
     const got = await sqliteDb.getRequestDetailById("d1");
     expect(got).toBeDefined();
     expect(got.id).toBe("d1");
+    expect(got.apiKey).toBe("sk-request-detail");
 
     const list = await sqliteDb.getRequestDetails({ provider: "openai" });
     expect(list.details.length).toBeGreaterThanOrEqual(1);
