@@ -64,6 +64,22 @@ const DEFAULT_PORT = 20128;
 // from the network. Network exposure is explicit opt-in via --host 0.0.0.0,
 // which then correctly requires API-key / login auth (see dashboardGuard.js).
 const DEFAULT_HOST = "127.0.0.1";
+const ALL_INTERFACES_HOST = "0.0.0.0";
+
+// First non-internal IPv4 — the address remote peers actually reach when bound to 0.0.0.0.
+function getLanIp() {
+  for (const ifaces of Object.values(os.networkInterfaces())) {
+    for (const i of ifaces || []) {
+      if (i.family === "IPv4" && !i.internal) return i.address;
+    }
+  }
+  return null;
+}
+
+// Local URL stays "localhost"; warn separately when bound to all interfaces (network-exposed).
+function getDisplayHost() {
+  return host === DEFAULT_HOST || host === ALL_INTERFACES_HOST ? "localhost" : host;
+}
 const MAX_PORT_ATTEMPTS = 10;
 // Identifiers for killAllAppProcesses - only kill 9router specifically
 const PROCESS_IDENTIFIERS = [
@@ -504,7 +520,7 @@ async function showInterfaceMenu(latestVersion) {
 
   clearScreen();
 
-  const displayHost = host === DEFAULT_HOST ? "localhost" : host;
+  const displayHost = getDisplayHost();
 
   // Detect tunnel/local mode for server URL display
   let serverUrl;
@@ -545,8 +561,13 @@ const MAX_RESTARTS = 2;
 const RESTART_RESET_MS = 30000; // Reset counter if alive > 30s
 
 function startServer(latestVersion) {
-  const displayHost = host === DEFAULT_HOST ? "localhost" : host;
+  const displayHost = getDisplayHost();
   const url = `http://${displayHost}:${port}/dashboard`;
+  // Surface real network exposure when explicitly bound to all interfaces (--host 0.0.0.0).
+  if (host === ALL_INTERFACES_HOST) {
+    const lanIp = getLanIp();
+    if (lanIp) console.log(`\x1b[33m⚠ Network-exposed: reachable at http://${lanIp}:${port} (bound 0.0.0.0). Use --host 127.0.0.1 for local-only.\x1b[0m`);
+  }
 
   let restartCount = 0;
   let serverStartTime = Date.now();

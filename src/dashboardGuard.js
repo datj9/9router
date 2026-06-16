@@ -32,7 +32,7 @@ const PUBLIC_API_PATHS = [
 ];
 
 // Public top-level prefixes (LLM API endpoints with their own API key auth).
-const PUBLIC_PREFIXES = ["/v1", "/v1beta", "/api/v1", "/api/v1beta"];
+const PUBLIC_PREFIXES = ["/v1", "/v1beta", "/api/v1", "/api/v1beta", "/codex"];
 
 // Always require JWT token regardless of requireLogin setting
 const ALWAYS_PROTECTED = [
@@ -101,12 +101,22 @@ function isLoopbackBound() {
   return isLoopbackHostname(bindAddress);
 }
 
-// A request is local only when the server is loopback-bound. The Host/Origin
-// header checks remain as defense-in-depth (CSRF / cross-origin), but are never
-// sufficient on their own — see isLoopbackBound().
+// A request is local when the unspoofable TCP peer IP (x-9r-real-ip, injected by
+// custom-server.js) is loopback. Without that header (bare server.js) we fall back
+// to requiring the server itself to be loopback-bound, since the Host header alone
+// is spoofable. The Origin check remains as defense-in-depth (CSRF / cross-origin).
 export function isLocalRequest(request) {
-  if (!isLoopbackBound()) return false;
-  if (!isLoopbackHostname(request.headers.get("host"))) return false;
+  // Trusted peer IP from TCP socket (custom-server.js); unspoofable. Primary anchor for "local".
+  const realIp = request.headers.get("x-9r-real-ip");
+  if (realIp) {
+    if (!isLoopbackHostname(realIp)) return false;
+  } else {
+    // Fallback for bare server.js (dev) without custom-server: the Host header is
+    // spoofable, so it is only trustworthy when the server is itself loopback-bound
+    // (AUTH-VULN-01). When bound to 0.0.0.0 there is no unspoofable local signal.
+    if (!isLoopbackBound()) return false;
+    if (!isLoopbackHostname(request.headers.get("host"))) return false;
+  }
   const origin = request.headers.get("origin");
   if (origin) {
     try {

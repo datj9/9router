@@ -7,7 +7,10 @@ import { getOpenAIResponsesEventName, isOpenAIResponsesTerminalEvent, formatInco
 import { dbg, isDebugEnabled } from "./debugLog.js";
 import { STREAM_HEARTBEAT_INTERVAL_MS } from "../config/runtimeConfig.js";
 
+import { SSE_DONE, SSE_HEADERS, SSE_HEADERS_NO_BUFFER } from "./sseConstants.js";
+
 export { COLORS, formatSSE };
+export { SSE_DONE, SSE_HEADERS, SSE_HEADERS_NO_BUFFER };
 
 // sharedEncoder is stateless — safe to share across streams
 const sharedEncoder = new TextEncoder();
