@@ -29,6 +29,12 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ error: "Key not found" }, { status: 404 });
     }
 
+    // A key's name is required: reject an explicit empty/whitespace rename
+    // (the POST create route enforces the same). Omitting name leaves it unchanged.
+    if (name !== undefined && !String(name).trim()) {
+      return NextResponse.json({ error: "Name is required" }, { status: 400 });
+    }
+
     const validationError = validateKeyMetadata({ managerEmail, expiresAt });
     if (validationError) {
       return NextResponse.json({ error: validationError }, { status: 400 });
@@ -36,7 +42,7 @@ export async function PUT(request, { params }) {
 
     const updateData = {};
     if (isActive !== undefined) updateData.isActive = isActive;
-    if (name !== undefined) updateData.name = name;
+    if (name !== undefined) updateData.name = String(name).trim();
     if (managerEmail !== undefined) updateData.managerEmail = managerEmail?.trim() || null;
     if (managerName !== undefined) updateData.managerName = managerName?.trim() || null;
     if (expiresAt !== undefined) updateData.expiresAt = expiresAt || null;
