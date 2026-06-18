@@ -106,6 +106,9 @@ function isLoopbackBound() {
 // to requiring the server itself to be loopback-bound, since the Host header alone
 // is spoofable. The Origin check remains as defense-in-depth (CSRF / cross-origin).
 export function isLocalRequest(request) {
+  // Stamped by custom-server.js when forwarding headers exist: request came through
+  // a reverse proxy, so the loopback socket is the proxy hop, not the end-user.
+  if (request.headers.get("x-9r-via-proxy")) return false;
   // Trusted peer IP from TCP socket (custom-server.js); unspoofable. Primary anchor for "local".
   const realIp = request.headers.get("x-9r-real-ip");
   if (realIp) {

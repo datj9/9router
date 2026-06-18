@@ -6,6 +6,7 @@ import { buildClineHeaders } from "../shared/clineAuth.js";
 import { getCachedClaudeHeaders } from "../utils/claudeHeaderCache.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
+import { stripUnsupportedParams } from "../translator/concerns/paramSupport.js";
 
 // The `context-1m-2025-08-07` Anthropic-Beta flag (1M context window) requires a
 // subscription entitlement. Accounts without it get 400 "The long context beta is
@@ -95,6 +96,7 @@ export class DefaultExecutor extends BaseExecutor {
       if (this.config.quirks?.dropClientMetadata) {
         delete transformed.client_metadata;
       }
+      stripUnsupportedParams(this.provider, model, transformed);
     }
 
     return injectReasoningContent({ provider: this.provider, model, body: transformed });
