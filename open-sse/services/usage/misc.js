@@ -97,13 +97,27 @@ export async function getGlmUsage(apiKey, provider, proxyOptions = null) {
     const limits = Array.isArray(data.limits) ? data.limits : [];
     const quotas = {};
 
+    // Map each TOKENS_LIMIT to a distinct window label so the 5-hour session
+    // quota and the weekly quota are both surfaced instead of overwriting each
+    // other under a single "session" key.
+    // GLM limit.unit: 3=hours, 6=weeks (reset times confirm: ~5h vs ~7d windows).
+    const windowLabel = (unit, number) => {
+      const n = Number(number) || 0;
+      const u = Number(unit);
+      if (u === 3) return n === 5 ? "Session" : `Session (${n}h)`;
+      if (u === 6) return n === 1 ? "Weekly" : `Weekly (${n}w)`;
+      if (u === 4) return n === 1 ? "Daily" : `Daily (${n}d)`;
+      return `Limit (${n}/unit ${u})`;
+    };
+
     for (const limit of limits) {
       if (!limit || limit.type !== "TOKENS_LIMIT") continue;
       const usedPercent = Number(limit.percentage) || 0;
       const resetMs = Number(limit.nextResetTime) || 0;
       const remaining = Math.max(0, 100 - usedPercent);
 
-      quotas["session"] = {
+      const label = windowLabel(limit.unit, limit.number);
+      quotas[label] = {
         used: usedPercent,
         total: 100,
         remaining,
