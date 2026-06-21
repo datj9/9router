@@ -1,5 +1,6 @@
 import { getProviderConnectionById } from "@/lib/localDb";
 import { getUsageForConnection, isUsageEligibleConnection } from "@/lib/usage/providerQuota";
+import { USAGE_APIKEY_PROVIDERS } from "@/shared/constants/providers";
 
 /**
  * GET /api/usage/[connectionId] - Get usage data for a specific connection
