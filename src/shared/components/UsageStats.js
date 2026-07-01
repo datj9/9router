@@ -86,7 +86,15 @@ function RecentRequests({ requests = [] }) {
   );
 }
 
-function sortData(dataMap, pendingMap = {}, sortBy, sortOrder) {
+function compareValues(valA, valB, sortOrder) {
+  if (typeof valA === "string") valA = valA.toLowerCase();
+  if (typeof valB === "string") valB = valB.toLowerCase();
+  if (valA < valB) return sortOrder === "asc" ? -1 : 1;
+  if (valA > valB) return sortOrder === "asc" ? 1 : -1;
+  return 0;
+}
+
+export function sortData(dataMap, pendingMap = {}, sortBy, sortOrder) {
   return Object.entries(dataMap || {})
     .map(([key, data]) => {
       const totalTokens = (data.promptTokens || 0) + (data.completionTokens || 0);
@@ -95,15 +103,7 @@ function sortData(dataMap, pendingMap = {}, sortBy, sortOrder) {
       const outputCost = totalTokens > 0 ? (data.completionTokens || 0) * (totalCost / totalTokens) : 0;
       return { ...data, key, totalTokens, totalCost, inputCost, outputCost, pending: pendingMap[key] || 0 };
     })
-    .sort((a, b) => {
-      let valA = a[sortBy];
-      let valB = b[sortBy];
-      if (typeof valA === "string") valA = valA.toLowerCase();
-      if (typeof valB === "string") valB = valB.toLowerCase();
-      if (valA < valB) return sortOrder === "asc" ? -1 : 1;
-      if (valA > valB) return sortOrder === "asc" ? 1 : -1;
-      return 0;
-    });
+    .sort((a, b) => compareValues(a[sortBy], b[sortBy], sortOrder));
 }
 
 function getGroupKey(item, keyField) {
@@ -117,7 +117,7 @@ function getGroupKey(item, keyField) {
   }
 }
 
-function groupDataByKey(data, keyField) {
+export function groupDataByKey(data, keyField, sortBy, sortOrder) {
   if (!Array.isArray(data)) return [];
   const groups = {};
   data.forEach((item) => {
@@ -125,7 +125,7 @@ function groupDataByKey(data, keyField) {
     if (!groups[gk]) {
       groups[gk] = {
         groupKey: gk,
-        summary: { requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, cost: 0, inputCost: 0, outputCost: 0, lastUsed: null, pending: 0 },
+        summary: { requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, cost: 0, totalCost: 0, inputCost: 0, outputCost: 0, lastUsed: null, pending: 0 },
         items: [],
       };
     }
@@ -135,6 +135,7 @@ function groupDataByKey(data, keyField) {
     s.completionTokens += item.completionTokens || 0;
     s.totalTokens += item.totalTokens || 0;
     s.cost += item.cost || 0;
+    s.totalCost += item.totalCost || 0;
     s.inputCost += item.inputCost || 0;
     s.outputCost += item.outputCost || 0;
     s.pending += item.pending || 0;
@@ -143,7 +144,25 @@ function groupDataByKey(data, keyField) {
     }
     groups[gk].items.push(item);
   });
-  return Object.values(groups);
+
+  const SUMMARY_FIELDS = new Set([
+    "requests", "promptTokens", "completionTokens", "totalTokens",
+    "cost", "totalCost", "inputCost", "outputCost", "pending",
+  ]);
+  return Object.values(groups).sort((groupA, groupB) => {
+    if (sortBy === "lastUsed") {
+      return compareValues(
+        new Date(groupA.summary.lastUsed || 0).getTime(),
+        new Date(groupB.summary.lastUsed || 0).getTime(),
+        sortOrder,
+      );
+    }
+    if (SUMMARY_FIELDS.has(sortBy)) {
+      return compareValues(groupA.summary[sortBy] || 0, groupB.summary[sortBy] || 0, sortOrder);
+    }
+    // label field (projectName, rawModel, provider, accountName, keyName, endpoint) == groupKey
+    return compareValues(groupA.groupKey, groupB.groupKey, sortOrder);
+  });
 }
 
 const MODEL_COLUMNS = [
@@ -345,7 +364,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
         const pendingMap = stats.pending?.byModel || {};
         return {
           columns: MODEL_COLUMNS,
-          groupedData: groupDataByKey(sortData(stats.byModel, pendingMap, sortBy, sortOrder), "rawModel"),
+          groupedData: groupDataByKey(sortData(stats.byModel, pendingMap, sortBy, sortOrder), "rawModel", sortBy, sortOrder),
           storageKey: "usage-stats:expanded-models",
           emptyMessage: "No usage recorded yet.",
           renderSummaryCells: (group) => (
@@ -378,7 +397,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
         }
         return {
           columns: ACCOUNT_COLUMNS,
-          groupedData: groupDataByKey(sortData(stats.byAccount, pendingMap, sortBy, sortOrder), "accountName"),
+          groupedData: groupDataByKey(sortData(stats.byAccount, pendingMap, sortBy, sortOrder), "accountName", sortBy, sortOrder),
           storageKey: "usage-stats:expanded-accounts",
           emptyMessage: "No account-specific usage recorded yet.",
           renderSummaryCells: (group) => (
@@ -403,7 +422,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       case "project": {
         return {
           columns: PROJECT_COLUMNS,
-          groupedData: groupDataByKey(sortData(stats.byProject, {}, sortBy, sortOrder), "projectName"),
+          groupedData: groupDataByKey(sortData(stats.byProject, {}, sortBy, sortOrder), "projectName", sortBy, sortOrder),
           storageKey: "usage-stats:expanded-projects",
           emptyMessage: "No project usage recorded yet. Send the x-project header to tag requests.",
           renderSummaryCells: (group) => (
@@ -428,7 +447,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       case "apiKey": {
         return {
           columns: API_KEY_COLUMNS,
-          groupedData: groupDataByKey(sortData(stats.byApiKey, {}, sortBy, sortOrder), "keyName"),
+          groupedData: groupDataByKey(sortData(stats.byApiKey, {}, sortBy, sortOrder), "keyName", sortBy, sortOrder),
           storageKey: "usage-stats:expanded-apikeys",
           emptyMessage: "No API key usage recorded yet.",
           renderSummaryCells: (group) => (
@@ -454,7 +473,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       default: {
         return {
           columns: ENDPOINT_COLUMNS,
-          groupedData: groupDataByKey(sortData(stats.byEndpoint, {}, sortBy, sortOrder), "endpoint"),
+          groupedData: groupDataByKey(sortData(stats.byEndpoint, {}, sortBy, sortOrder), "endpoint", sortBy, sortOrder),
           storageKey: "usage-stats:expanded-endpoints",
           emptyMessage: "No endpoint usage recorded yet.",
           renderSummaryCells: (group) => (

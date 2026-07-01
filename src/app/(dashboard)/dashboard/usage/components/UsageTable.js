@@ -138,9 +138,9 @@ export default function UsageTable({
       ];
     }
     return [
-      { field: "promptTokens", label: "Input Cost" },
-      { field: "completionTokens", label: "Output Cost" },
-      { field: "cost", label: "Total Cost" },
+      { field: "inputCost",  label: "Input Cost"  },
+      { field: "outputCost", label: "Output Cost" },
+      { field: "totalCost",  label: "Total Cost"  },
     ];
   }, [viewMode]);
 
