@@ -27,74 +27,27 @@ describe("injectSystemPrompt — OpenAI Responses format", () => {
     expect(body.input).toHaveLength(1);
   });
 
-  it("unshifts proper Responses item when no instructions and no system/developer in input", () => {
+  it("sets instructions without prepending a Responses input item", () => {
     const body = {
       input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
     };
     injectSystemPrompt(body, FORMATS.OPENAI_RESPONSES, "be terse");
 
-    expect(body.input).toHaveLength(2);
-    expect(body.input[0]).toEqual({
-      type: "message",
-      role: "system",
-      content: [{ type: "input_text", text: "be terse" }],
-    });
-  });
-
-  it("appends to existing system message in input[] with typed array", () => {
-    const body = {
-      input: [
-        { type: "message", role: "system", content: [{ type: "input_text", text: "base" }] },
-        { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
-      ],
-    };
-    injectSystemPrompt(body, FORMATS.OPENAI_RESPONSES, "extra");
-
-    expect(body.input[0].content).toEqual([
-      { type: "input_text", text: "base" },
-      { type: "input_text", text: "extra" },
+    expect(body.instructions).toBe("be terse");
+    expect(body.input).toEqual([
+      { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
     ]);
   });
 
-  it("converts bare-string system content to typed array on append", () => {
-    const body = {
-      input: [
-        { type: "message", role: "system", content: "base" },
-        { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
-      ],
-    };
-    injectSystemPrompt(body, FORMATS.OPENAI_RESPONSES, "extra");
-
-    expect(body.input[0].content).toEqual([
-      { type: "input_text", text: `base${SEP}extra` },
-    ]);
-  });
-
-  it("adds type:message when appending to system item that lacks type", () => {
-    const body = {
-      input: [
-        { role: "system", content: "base" },
-        { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
-      ],
-    };
-    injectSystemPrompt(body, FORMATS.OPENAI_RESPONSES, "extra");
-
-    expect(body.input[0].type).toBe("message");
-  });
-
-  it("double injection (caveman + ponytail) produces valid items", () => {
+  it("combines multiple injected prompts in instructions", () => {
     const body = {
       input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
     };
     injectSystemPrompt(body, FORMATS.OPENAI_RESPONSES, "caveman prompt");
     injectSystemPrompt(body, FORMATS.OPENAI_RESPONSES, "ponytail prompt");
 
-    expect(body.input).toHaveLength(2);
-    expect(body.input[0].type).toBe("message");
-    expect(body.input[0].role).toBe("system");
-    expect(body.input[0].content).toHaveLength(2);
-    expect(body.input[0].content[0]).toEqual({ type: "input_text", text: "caveman prompt" });
-    expect(body.input[0].content[1]).toEqual({ type: "input_text", text: "ponytail prompt" });
+    expect(body.instructions).toBe(`caveman prompt${SEP}ponytail prompt`);
+    expect(body.input).toHaveLength(1);
   });
 });
 
