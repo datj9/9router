@@ -28,8 +28,8 @@ export function injectSystemPrompt(body, format, prompt) {
 
 // OpenAI-shaped: messages[] (chat) or input[] (responses) or instructions (responses string)
 function injectMessagesSystem(body, format, prompt) {
-  // OpenAI Responses API: top-level string field
-  if (typeof body.instructions === "string") {
+  // Codex's Responses endpoint accepts system instructions only at the top level.
+  if (format === FORMATS.OPENAI_RESPONSES) {
     body.instructions = body.instructions
       ? `${body.instructions}${SEP}${prompt}`
       : prompt;
